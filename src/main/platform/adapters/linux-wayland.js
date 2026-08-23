@@ -13,7 +13,6 @@ function appendDisabledFeature(app, feature) {
 
 function configureLinuxWayland({ app, projectRoot, environment, detected }) {
   appendDisabledFeature(app, "WaylandOverlayDelegation");
-  app.commandLine.appendSwitch("in-process-gpu");
   let nativeBridge;
   try {
     const bridgePath = environment.ASTERPET_WAYLAND_BRIDGE

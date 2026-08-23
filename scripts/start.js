@@ -26,6 +26,12 @@ if (process.platform === "linux") {
 const electronFlags = environment.ELECTRON_REMOTE_DEBUGGING_PORT
   ? [`--remote-debugging-port=${environment.ELECTRON_REMOTE_DEBUGGING_PORT}`]
   : [];
+if (process.platform === "linux"
+    && environment.XDG_SESSION_TYPE === "wayland"
+    && environment.WAYLAND_DISPLAY
+    && environment.ELECTRON_OZONE_PLATFORM_HINT !== "x11") {
+  electronFlags.push("--in-process-gpu");
+}
 const child = spawn(electronPath, [...electronFlags, root, ...process.argv.slice(2)], {
   stdio: "inherit",
   env: environment
