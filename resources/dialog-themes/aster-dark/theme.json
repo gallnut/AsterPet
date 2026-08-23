@@ -1,0 +1,31 @@
+{
+  "format": "asterpet.dialog-theme/v1",
+  "id": "aster-dark",
+  "name": "Aster Dark",
+  "version": "1.0.0",
+  "author": "AsterPet",
+  "tokens": {
+    "fontFamily": "system-ui, \"Microsoft YaHei UI\", sans-serif",
+    "surface": "#1f2026",
+    "surfaceElevated": "#393a40",
+    "surfaceBorder": "rgba(255,255,255,.12)",
+    "text": "#ffffff",
+    "mutedText": "rgba(255,255,255,.62)",
+    "accent": "rgba(75,137,224,.72)",
+    "accentHover": "rgba(75,137,224,.38)",
+    "danger": "#ffb9b9",
+    "dangerSurface": "rgba(226,74,74,.14)",
+    "inputSurface": "rgba(255,255,255,.055)",
+    "controlSurface": "rgba(255,255,255,.1)",
+    "controlHover": "rgba(255,255,255,.2)",
+    "scrollThumb": "rgba(143,194,245,.52)",
+    "radiusCard": 19,
+    "radiusControl": 15,
+    "radiusOption": 10,
+    "shadow": "0 10px 28px rgba(0,0,0,.28)"
+  },
+  "layout": {
+    "density": "comfortable",
+    "tail": "speech"
+  }
+}

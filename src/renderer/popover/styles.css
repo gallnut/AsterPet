@@ -1,0 +1,11 @@
+:root { --ui-scale: 1; --theme-font-family: system-ui, "Microsoft YaHei UI", sans-serif; --theme-surface-elevated: #393a40; --theme-text: #fff; --theme-accent-hover: rgba(75,137,224,.38); --theme-scroll-thumb: rgba(143,194,245,.52); --theme-radius-control: 15px; --theme-radius-option: 9px; color-scheme: dark; font-family: var(--theme-font-family); }
+* { box-sizing: border-box; }
+html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; background: transparent; }
+#surface { width: calc(100% - 4px); height: calc(100% - 4px); margin: 2px; overflow: hidden; border-radius: calc(var(--theme-radius-control) * var(--ui-scale)); background: var(--theme-surface-elevated); }
+#items { width: 100%; height: 100%; padding: calc(6px * var(--ui-scale)); overflow-x: hidden; overflow-y: auto; border: 0; background: transparent; }
+button { display: block; width: 100%; height: calc(32px * var(--ui-scale)); padding: 0 calc(12px * var(--ui-scale)); overflow: hidden; border: 0; border-radius: calc(var(--theme-radius-option) * var(--ui-scale)); color: var(--theme-text); background: transparent; font: calc(13px * var(--ui-scale)) var(--theme-font-family); text-align: left; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
+button:hover { background: var(--theme-accent-hover); }
+::-webkit-scrollbar { width: 3px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--theme-scroll-thumb); border-radius: 2px; }
+::-webkit-scrollbar-button { display: none; }

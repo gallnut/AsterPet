@@ -1,0 +1,31 @@
+{
+  "name": "asterpet",
+  "version": "1.0.0",
+  "license": "Apache-2.0",
+  "productName": "AsterPet",
+  "description": "Cross-platform Spine desktop companion with importable character packages",
+  "main": "src/main/index.js",
+  "scripts": {
+    "postinstall": "node scripts/ensure-electron.js && node scripts/build-wayland-bridge.js",
+    "repair:electron": "node scripts/ensure-electron.js",
+    "start": "node scripts/start.js",
+    "profile:analyze": "node scripts/analyze-chromium-trace.js",
+    "profile:runtime": "node scripts/profile-runtime.js",
+    "check": "node scripts/check.js",
+    "migrate:layers": "node scripts/migrate-layer-metadata.mjs",
+    "validate:layers": "node scripts/migrate-layer-metadata.mjs --check",
+    "pack": "node scripts/pack.js",
+    "pack:linux": "node scripts/build-wayland-bridge.js && node scripts/pack.js linux"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "@esotericsoftware/spine-player": "4.1.55",
+    "extract-zip": "2.0.1"
+  },
+  "devDependencies": {
+    "@electron/packager": "20.3.0",
+    "electron": "37.2.6"
+  }
+}

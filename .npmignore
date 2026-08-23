@@ -1,0 +1,13 @@
+assets/
+content/
+dist/
+.packager-tmp/
+.package-test-cache/
+local-packages/
+resources/scenes/**/assets/
+.cg-test-software/
+.cg-test-user-data/
+.test-user-data/
+startup.log
+test-*.png
+node.cmd

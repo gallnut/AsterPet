@@ -1,0 +1,92 @@
+{
+  "internalHiddenPatterns": [
+    "^(MASK|body_shadow)$",
+    "^Mosaic(?:_|/)"
+  ],
+  "backgroundPatterns": [
+    "^floor\\d*$",
+    "^(BG|Slot_BG|Root_BG\\d*|Background|BackGround)$",
+    "^BG(?!_Number)",
+    "^(wall|Room_BG|Scene_BG|BackGround_)",
+    "^bg_(floor|wall|pillar|light)",
+    "^(Back_Bamboo_\\d+|Bamboo_\\d+|Front_Bamboo_\\d+|Back_Grass|Grass_\\d+_?\\d*|Home|Moon_Light|Leaf_(?:Shadow_)?\\d+|leaf_[a-z].*)$",
+    "^(Earth|Earth_|Jupiter|Meteorite_|Moon$|Planet_|Saturn|Universe|Uni_BG)"
+  ],
+  "characterPatterns": [
+    "^(?:\\d+[_-]?)?(?:[A-Z]+_)?(arm|body|chest|ear|eye|eyeball|eyeballs|eyebase|eyelid|eyelash|eyebrow|brow|lash|face|finger|hand|foot|toe|thigh|hair|head|headacc|hip|leg|mouth|tongue|neck|nose|ponytail|pony_hair|shadow_hair|shoulder|side_hair|light)(?:\\d|_|-|\\s|$)",
+    "^(F_|B_|L_|R_|new_|bang|han|eyew|pupil|tail|palm|wing|hairF|Calf|Upperarm|forearm|eyeild|Blush)",
+    "^(?:back|front|side)[ _-]?(?:hair|tail)(?:\\d|_|-|\\s|$)",
+    "^(?:hairside|backhair|fronthair|twintail|braid|lash down|lash up)(?:\\d|_|-|\\s|$)",
+    "^(L_|R_)(?:Arm|Brow|Eye|Foot|Forearm|Hand|Leg|Thigh|Toe|UpperArm)",
+    "^(Mosaic)(?:_|/|$)",
+    "^(Root|Spine|Character|Bip_|IK|root_bones|Root_Bones|LV\\d|Idle|Touch|CutIn|normal)"
+  ],
+  "propGroups": [
+    {
+      "pattern": "^(window|curtain|ceiling|railing|pillar|stand|stage|pool|tent|frame|stairs|door|roof|ground|floor|wall|room|scene|range|grid)",
+      "label": "背景与场景",
+      "role": "background",
+      "defaultVisible": false
+    },
+    {
+      "pattern": "^(chair|table|desk|bed|sofa|stool|cabinet|shelf|monitor|laptop|pad|lamp|pillow|mattress|fabric|yogamat|bg_(table|cloth))",
+      "label": "家具与寝具"
+    },
+    {
+      "pattern": "^(bottle|cup|glass|lid|plate|dish|bowl|spoon|fork|knife|food|cake|bread|fruit|banana|orange|bg_cup)",
+      "label": "食品与餐具"
+    },
+    {
+      "pattern": "^(liquor|lquor|liquid|juice)",
+      "label": "食品与餐具"
+    },
+    {
+      "pattern": "^(water|stains|Drop|Splash|wine)",
+      "label": "液体与痕迹"
+    },
+    {
+      "pattern": "^(hat|headgear|hairpin|hairband|ribbon|coat|jacket|belt|skirt|cloth|sleeve|clothing|accessories|dress|collar|bow|feather|strap|shoe|glove|scarf|shawl|necklace|earring|bracelet|ring|Band)",
+      "label": "服装与配饰"
+    },
+    {
+      "pattern": "^(toy|bear|mbear|fbear|rope|bead)",
+      "label": "玩具"
+    },
+    {
+      "pattern": "^(weapon|wp|gun|sword|knife|armor|bullet|bomb|grenade|missile|scope|target|radio|bag|box)",
+      "label": "武器与装备"
+    },
+    {
+      "pattern": "^(Robot|Screen|Phone|pipeline|cable|wire|drone|machinery|motorcycle|crane)",
+      "label": "机械与设备"
+    },
+    {
+      "pattern": "^(sunflower|flower|rose|plant|petal|bouquet|bush|tree|grass|leaf|pigeon|butterfly|bird|fish|coconut|weeds|reed|chick|rabbit|rabbir|cat|Stone|vine|leaves|bat|crab)",
+      "label": "自然与生物"
+    },
+    {
+      "pattern": "^(body pillow|photo|picture|book|paper|board|bell|money|ball|heart|love)",
+      "label": "生活与装饰"
+    },
+    {
+      "pattern": "^(Back_Gear|Front_Gear|Clock_)",
+      "label": "主题装饰"
+    },
+    {
+      "pattern": "^(Earth_|Jupiter|Meteorite_|Moon$|Planet_|Saturn|Universe|Uni_BG)",
+      "label": "主题装饰"
+    },
+    {
+      "pattern": "^(cube|Number_|BG_Number)",
+      "label": "主题装饰"
+    },
+    {
+      "pattern": "^(UI|Voice|Text|Label|Mark|Arrow|Logo|GAME|Mayday|advertise)",
+      "label": "文字与界面"
+    },
+    {
+      "pattern": "^(Beam|FX(?:[/_-]|$)|EF[_-]|.*_EF(?:_|$)|Electronic_space|Red_?BG|Front_Box|Cut$|Square_EF|effect|eff|spark|sparkle|speed[_ -]?line|light|uplight|cornerlight|spotlight|bubble|wave|emote|emoji|Glow|flash|fog|smoke|bloon|line|spot|Purple|red|white|Black)",
+      "label": "场景特效"
+    }
+  ]
+}
