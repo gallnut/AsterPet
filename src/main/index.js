@@ -95,6 +95,10 @@ app.on("second-instance", () => {
 });
 
 let shutdownStarted = false;
+for (const signal of ["SIGINT", "SIGTERM"]) {
+  process.on(signal, () => app.quit());
+}
+
 app.on("before-quit", event => {
   if (shutdownStarted) return;
   event.preventDefault();
