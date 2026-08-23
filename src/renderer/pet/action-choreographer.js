@@ -41,6 +41,7 @@
       const configuredMixDuration = Number(source.actionMixDuration ?? source.mixDuration);
       this.settings = {
         track: Math.max(1, Math.round(Number(source.actionTrack) || 1)),
+        agentTrack: Math.max(2, Math.round(Number(source.agentTrack) || 2)),
         mixDuration: Number.isFinite(configuredMixDuration)
           ? Math.max(0, Math.min(1.5, configuredMixDuration))
           : 0.18
@@ -60,7 +61,7 @@
     stop() {
       clearTimeout(this.overlayTimer);
       clearTimeout(this.resumeTimer);
-      if (this.activeTrack !== undefined) {
+      if (this.activeTrack !== undefined && this.activeTrack !== 1) {
         this.getPlayer()?.animationState?.setEmptyAnimation?.(this.activeTrack, this.settings?.mixDuration ?? 0.18);
       }
       this.actionRecipes = new Map();
@@ -80,7 +81,7 @@
       this.overlayTimer = undefined;
       this.resumeTimer = undefined;
       this.resumeAt = 0;
-      if (this.activeTrack !== undefined) {
+      if (this.activeTrack !== undefined && this.activeTrack !== 1) {
         this.getPlayer()?.animationState?.setEmptyAnimation?.(this.activeTrack, this.settings?.mixDuration ?? 0.18);
       }
       this.activeTrack = undefined;
@@ -93,7 +94,7 @@
       return animationNames.find(name => normalizedName(name) === requested);
     }
 
-    normalizeEntries(value) {
+    normalizeEntries(value, defaultTrack = this.settings.track) {
       const entries = Array.isArray(value) ? value : value ? [value] : [];
       return entries
         .map(entry => typeof entry === "string" ? { animation: entry } : entry)
@@ -103,7 +104,7 @@
         .map(entry => ({
           animation: entry.animation,
           weight: Math.max(0.01, Number(entry.weight) || 1),
-          track: Math.max(1, Math.round(Number(entry.track) || this.settings.track)),
+          track: Math.max(1, Math.round(Number(entry.track) || defaultTrack)),
           holdMs: Number.isFinite(Number(entry.holdMs)) ? Math.max(0, Number(entry.holdMs)) : undefined,
           loop: typeof entry.loop === "boolean" ? entry.loop : undefined,
           mixDuration: Number.isFinite(Number(entry.mixDuration))
@@ -112,12 +113,12 @@
         }));
     }
 
-    inferEntries(tags) {
+    inferEntries(tags, defaultTrack = this.settings.track) {
       const candidates = this.listAnimationNames().filter(name => {
         const normalized = normalizedName(name);
         return tags.some(tag => normalized.includes(tag));
       });
-      return this.normalizeEntries(candidates.map(animation => ({ animation })));
+      return this.normalizeEntries(candidates.map(animation => ({ animation })), defaultTrack);
     }
 
     resolveActionRecipes(configured) {
@@ -138,9 +139,16 @@
       const resolved = new Map();
       for (const stateName of stateNames) {
         const key = normalizedName(stateName);
-        const entries = Object.hasOwn(configuredOverlays, stateName)
-          ? this.normalizeEntries(configuredOverlays[stateName])
-          : this.inferEntries(DEFAULT_AGENT_TAGS[key] || []);
+        let entries = Object.hasOwn(configuredOverlays, stateName)
+          ? this.normalizeEntries(configuredOverlays[stateName], this.settings.agentTrack)
+          : this.inferEntries(DEFAULT_AGENT_TAGS[key] || [], this.settings.agentTrack);
+        if (!Object.hasOwn(configuredOverlays, stateName) && entries.length > 1) {
+          entries = [...entries].sort((left, right) => {
+            const leftFace = /^_?face\d+[_-]?talk$/i.test(left.animation) ? 0 : 1;
+            const rightFace = /^_?face\d+[_-]?talk$/i.test(right.animation) ? 0 : 1;
+            return leftFace - rightFace;
+          });
+        }
         if (entries[0]) resolved.set(key, { ...entries[0], loop: entries[0].loop !== false });
       }
       return resolved;
@@ -173,7 +181,7 @@
       const animation = player?.skeleton?.data?.findAnimation?.(entry.animation);
       if (!player?.animationState || !animation) return 0;
       clearTimeout(this.overlayTimer);
-      if (this.activeTrack !== undefined && this.activeTrack !== entry.track) {
+      if (this.activeTrack !== undefined && this.activeTrack !== entry.track && this.activeTrack !== 1) {
         player.animationState.setEmptyAnimation?.(this.activeTrack, entry.mixDuration);
       }
       const trackEntry = player.animationState.setAnimation(entry.track, entry.animation, Boolean(entry.loop));
@@ -186,7 +194,7 @@
       const holdMs = entry.holdMs ?? defaultHoldMs;
       const visibleDurationMs = Math.max(animation.duration * 1000, holdMs);
       this.overlayTimer = setTimeout(() => {
-        player.animationState.setEmptyAnimation?.(entry.track, entry.mixDuration);
+        if (entry.track !== 1) player.animationState.setEmptyAnimation?.(entry.track, entry.mixDuration);
         this.overlayTimer = undefined;
         if (this.activeTrack === entry.track) this.activeTrack = undefined;
       }, Math.max(100, visibleDurationMs + entry.mixDuration * 1000));
@@ -235,7 +243,7 @@
         return;
       }
       clearTimeout(this.overlayTimer);
-      if (this.activeTrack !== undefined) {
+      if (this.activeTrack !== undefined && this.activeTrack !== 1) {
         this.getPlayer()?.animationState?.setEmptyAnimation?.(this.activeTrack, entry.mixDuration);
       }
       this.activeTrack = undefined;

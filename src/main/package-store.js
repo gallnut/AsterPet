@@ -2,6 +2,7 @@ const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
 const extract = require("extract-zip");
+const { validateAppearanceMetadata } = require("./appearance-metadata");
 const { LAYER_FORMAT, validateLayerMetadata } = require("./layer-metadata");
 
 const PACKAGE_FORMAT = "asterpet.character/v1";
@@ -41,6 +42,7 @@ function validateManifest(manifest, packageRoot, { validateSceneConfigs = false 
       if (validateSceneConfigs) {
         const sceneConfig = JSON.parse(fs.readFileSync(configPath, "utf8"));
         validateLayerMetadata(sceneConfig.layers, `场景 ${sceneId} layers`);
+        validateAppearanceMetadata(sceneConfig.appearance, `场景 ${sceneId} appearance`);
         if (sceneConfig.type === "spine" && sceneConfig.layers?.format !== LAYER_FORMAT) {
           throw new Error(`场景 ${sceneId} 必须由资源包提供 ${LAYER_FORMAT} 图层声明`);
         }

@@ -1,6 +1,6 @@
 (function registerToolbarController() {
   class ToolbarController {
-    constructor({ desktopPet, elements, getScene, getActiveSceneId, onPackagesChanged, setToolsVisible, setMousePassthrough, playAnimation, changeScale, getAnimationNames, getPlayer, applyLayerVisibility, fitSkeletonToWindow }) {
+    constructor({ desktopPet, elements, getScene, getActiveSceneId, onPackagesChanged, setToolsVisible, setMousePassthrough, playAnimation, changeScale, getAnimationNames, selectAppearance }) {
       this.desktopPet = desktopPet;
       this.elements = elements;
       this.getScene = getScene;
@@ -11,9 +11,7 @@
       this.playAnimation = playAnimation;
       this.changeScale = changeScale;
       this.getAnimationNames = getAnimationNames;
-      this.getPlayer = getPlayer;
-      this.applyLayerVisibility = applyLayerVisibility;
-      this.fitSkeletonToWindow = fitSkeletonToWindow;
+      this.selectAppearance = selectAppearance;
       this.packages = [];
     }
 
@@ -199,11 +197,7 @@
     bind() {
       const elements = this.elements;
       elements.animationSelect.addEventListener("change", () => this.playAnimation(elements.animationSelect.value));
-      elements.skinSelect.addEventListener("change", () => {
-        this.getPlayer().skeleton.setSkinByName(elements.skinSelect.value);
-        this.applyLayerVisibility();
-        this.fitSkeletonToWindow();
-      });
+      elements.appearanceSelect.addEventListener("change", () => this.selectAppearance(elements.appearanceSelect.value));
       elements.propsToggle.addEventListener("click", () => {
         this.closePanels(elements.propsPanel);
         elements.propsPanel.hidden = !elements.propsPanel.hidden;

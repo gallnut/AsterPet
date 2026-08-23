@@ -41,7 +41,15 @@ class SettingsStore {
         : {},
       favoriteSceneIds: Array.isArray(settings.ui?.favoriteSceneIds)
         ? [...new Set(settings.ui.favoriteSceneIds.filter(value => typeof value === "string"))]
-        : []
+        : [],
+      appearanceByScene: settings.ui?.appearanceByScene && typeof settings.ui.appearanceByScene === "object"
+        ? Object.fromEntries(Object.entries(settings.ui.appearanceByScene)
+          .filter(([sceneId, skin]) => typeof sceneId === "string" && typeof skin === "string"))
+        : {},
+      variantSceneByFamily: settings.ui?.variantSceneByFamily && typeof settings.ui.variantSceneByFamily === "object"
+        ? Object.fromEntries(Object.entries(settings.ui.variantSceneByFamily)
+          .filter(([familyId, sceneId]) => typeof familyId === "string" && typeof sceneId === "string"))
+        : {}
     };
   }
 
@@ -57,7 +65,19 @@ class SettingsStore {
         ? current.favoriteSceneIds
         : Array.isArray(values.favoriteSceneIds)
           ? [...new Set(values.favoriteSceneIds.filter(value => typeof value === "string"))]
-          : current.favoriteSceneIds
+          : current.favoriteSceneIds,
+      appearanceByScene: values.appearanceByScene === undefined
+        ? current.appearanceByScene
+        : values.appearanceByScene && typeof values.appearanceByScene === "object"
+          ? Object.fromEntries(Object.entries(values.appearanceByScene)
+            .filter(([sceneId, skin]) => typeof sceneId === "string" && typeof skin === "string"))
+          : current.appearanceByScene,
+      variantSceneByFamily: values.variantSceneByFamily === undefined
+        ? current.variantSceneByFamily
+        : values.variantSceneByFamily && typeof values.variantSceneByFamily === "object"
+          ? Object.fromEntries(Object.entries(values.variantSceneByFamily)
+            .filter(([familyId, sceneId]) => typeof familyId === "string" && typeof sceneId === "string"))
+          : current.variantSceneByFamily
     };
     if (persist) this.update({ ui: next });
     return next;

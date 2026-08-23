@@ -1,5 +1,5 @@
 const animationSelect = document.getElementById("animations");
-const skinSelect = document.getElementById("skins");
+const appearanceSelect = document.getElementById("appearances");
 const propsPanel = document.getElementById("props-panel");
 const propsList = document.getElementById("props-list");
 const layerSearchInput = document.getElementById("layer-search-input");
@@ -27,7 +27,7 @@ let scene;
 let sceneManifest;
 let sceneCatalog;
 let globalLayerRules;
-let uiState = { propVisibility: {}, favoriteSceneIds: [] };
+let uiState = { propVisibility: {}, favoriteSceneIds: [], appearanceByScene: {}, variantSceneByFamily: {} };
 let uiStateInitialized = false;
 let player;
 let animationNames = [];
@@ -41,6 +41,7 @@ let hiddenLayerSlotIndices = [];
 let currentAudio;
 let baseViewport;
 let animationViewports = {};
+let appearanceOptions = new Map();
 let activeViewportAnimation;
 let sceneScale;
 let adaptiveWindowSize;
@@ -118,7 +119,7 @@ const toolbarController = new window.AsterPet.ToolbarController({
   desktopPet: window.desktopPet,
   elements: {
     animationSelect,
-    skinSelect,
+    appearanceSelect,
     propsPanel,
     layerSearchInput,
     scenePanel,
@@ -165,9 +166,7 @@ const toolbarController = new window.AsterPet.ToolbarController({
   playAnimation: name => playAnimation(name),
   changeScale: delta => changeSceneScale(delta),
   getAnimationNames: () => animationNames,
-  getPlayer: () => player,
-  applyLayerVisibility: () => applyLayerVisibility(),
-  fitSkeletonToWindow: () => fitSkeletonToWindow()
+  selectAppearance: optionId => selectAppearance(optionId)
 });
 
 function applyEmbeddedStatusLayout(layout) {
@@ -290,7 +289,8 @@ async function disposeScene({ shutdown = false } = {}) {
   activeViewportAnimation = undefined;
   adaptiveWindowSize = undefined;
   animationSelect.replaceChildren();
-  skinSelect.replaceChildren();
+  appearanceSelect.replaceChildren();
+  appearanceOptions.clear();
   propsList.replaceChildren();
   geometryInput.resetScene();
   await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
@@ -364,6 +364,8 @@ async function initializeUiState() {
   if (!uiState || typeof uiState !== "object") uiState = { propVisibility: {} };
   if (!uiState.propVisibility || typeof uiState.propVisibility !== "object") uiState.propVisibility = {};
   if (!Array.isArray(uiState.favoriteSceneIds)) uiState.favoriteSceneIds = [];
+  if (!uiState.appearanceByScene || typeof uiState.appearanceByScene !== "object") uiState.appearanceByScene = {};
+  if (!uiState.variantSceneByFamily || typeof uiState.variantSceneByFamily !== "object") uiState.variantSceneByFamily = {};
   let migrated = false;
   try {
     if (window.desktopPet.testMode) return;
@@ -638,12 +640,14 @@ function buildSceneList() {
   const favoritesOnly = sceneFilter.value === "favorites";
   const categoryLabels = { interaction: "互动", character: "角色", cg: "CG" };
   const groups = new Map();
-  for (const sceneId of Object.keys(sceneManifest.scenes)) {
-    if (favoritesOnly && !favoriteSceneIds.has(sceneId)) continue;
-    const metadata = sceneCatalog[sceneId] || {};
-    const groupId = metadata.characterId || "其他";
+  const families = window.AsterPet.resolveSceneFamilies(sceneCatalog);
+  for (const family of families) {
+    const familySceneIds = family.entries.map(entry => entry.sceneId);
+    const isFavorite = familySceneIds.some(sceneId => favoriteSceneIds.has(sceneId));
+    if (favoritesOnly && !isFavorite) continue;
+    const groupId = family.characterId || "其他";
     if (!groups.has(groupId)) groups.set(groupId, []);
-    groups.get(groupId).push({ sceneId, metadata });
+    groups.get(groupId).push({ family, isFavorite });
   }
   const sortedGroups = [...groups.entries()].sort(([left], [right]) =>
     left === "其他" ? 1 : right === "其他" ? -1 : left.localeCompare(right, undefined, { numeric: true })
@@ -654,44 +658,48 @@ function buildSceneList() {
     const group = document.createElement("details");
     group.className = "scene-group";
     group.dataset.groupId = groupId;
-    group.open = favoritesOnly || openGroupIds.has(groupId) || entries.some(entry => entry.sceneId === scene.id);
+    group.open = favoritesOnly || openGroupIds.has(groupId) || entries.some(entry => entry.family.entries.some(item => item.sceneId === scene.id));
     const summary = document.createElement("summary");
-    summary.textContent = `${groupId} (${entries.length})`;
+    summary.textContent = `${entries[0]?.family.characterLabel || groupId} (${entries.length})`;
     group.append(summary);
     entries.sort((left, right) => {
       const order = { interaction: 0, character: 1, cg: 2 };
-      return (order[left.metadata.category] ?? 9) - (order[right.metadata.category] ?? 9)
-        || left.sceneId.localeCompare(right.sceneId, undefined, { numeric: true });
+      return (order[left.family.category] ?? 9) - (order[right.family.category] ?? 9)
+        || left.family.label.localeCompare(right.family.label, undefined, { numeric: true });
     });
-    for (const { sceneId, metadata } of entries) {
+    for (const { family, isFavorite } of entries) {
+      const activeSceneId = family.entries.some(item => item.sceneId === scene.id) ? scene.id
+        : uiState.variantSceneByFamily?.[family.id];
+      const targetSceneId = family.entries.some(item => item.sceneId === activeSceneId)
+        ? activeSceneId : family.entries[0]?.sceneId;
       const row = document.createElement("div");
       row.className = "scene-option-row";
       const button = document.createElement("button");
       button.className = "scene-option";
-      button.textContent = `${categoryLabels[metadata.category] || "场景"} · ${sceneId}`;
-      button.title = metadata.title || sceneId;
-      button.classList.toggle("active", sceneId === scene.id);
+      button.textContent = family.label;
+      button.title = `${categoryLabels[family.category] || "场景"} · ${family.characterLabel} · ${family.label}`;
+      button.classList.toggle("active", family.entries.some(item => item.sceneId === scene.id));
       button.addEventListener("click", () => {
-        if (sceneId === scene.id) {
+        if (family.entries.some(item => item.sceneId === scene.id)) {
           scenePanel.hidden = true;
           return;
         }
-        petLog(`Scene option clicked: ${sceneId}`);
-        void persistUiState({ selectedScene: sceneId });
+        petLog(`Scene family clicked: ${family.id} -> ${targetSceneId}`);
+        void persistUiState({ selectedScene: targetSceneId, variantSceneByFamily: { ...uiState.variantSceneByFamily, [family.id]: targetSceneId } });
         setMousePassthrough(false);
-        window.desktopPet.switchScene(sceneId);
+        window.desktopPet.switchScene(targetSceneId);
       });
       const favorite = document.createElement("button");
       favorite.type = "button";
       favorite.className = "scene-favorite";
-      favorite.textContent = favoriteSceneIds.has(sceneId) ? "★" : "☆";
-      favorite.title = favoriteSceneIds.has(sceneId) ? "取消收藏场景" : "收藏场景";
+      favorite.textContent = isFavorite ? "★" : "☆";
+      favorite.title = isFavorite ? "取消收藏场景" : "收藏场景";
       favorite.setAttribute("aria-label", favorite.title);
-      favorite.setAttribute("aria-pressed", String(favoriteSceneIds.has(sceneId)));
+      favorite.setAttribute("aria-pressed", String(isFavorite));
       favorite.addEventListener("click", event => {
         event.preventDefault();
         event.stopPropagation();
-        void toggleSceneFavorite(sceneId);
+        void toggleSceneFavorite(family);
       });
       row.append(button, favorite);
       group.append(row);
@@ -702,9 +710,14 @@ function buildSceneList() {
 }
 
 async function toggleSceneFavorite(sceneId) {
+  const family = typeof sceneId === "string" ? window.AsterPet.resolveSceneFamilies(sceneCatalog)
+    .find(candidate => candidate.entries.some(entry => entry.sceneId === sceneId)) : sceneId;
+  if (!family) return;
   const favoriteSceneIds = new Set(uiState.favoriteSceneIds);
-  if (favoriteSceneIds.has(sceneId)) favoriteSceneIds.delete(sceneId);
-  else favoriteSceneIds.add(sceneId);
+  const familySceneIds = family.entries.map(entry => entry.sceneId);
+  const isFavorite = familySceneIds.some(candidate => favoriteSceneIds.has(candidate));
+  for (const candidate of familySceneIds) favoriteSceneIds.delete(candidate);
+  if (!isFavorite) favoriteSceneIds.add(family.entries.find(entry => entry.sceneId === scene.id)?.sceneId || family.entries[0].sceneId);
   uiState = await window.desktopPet.updateUiState({ favoriteSceneIds: [...favoriteSceneIds] });
   buildSceneList();
 }
@@ -1037,12 +1050,13 @@ function calculateAnimationVisibleBounds() {
   const configuredViewportActions = Array.isArray(scene?.viewport?.actions)
     ? scene.viewport.actions
     : ["idle", scene?.gestures?.click];
-  const cutInActionName = scene?.gestures?.doubleClick || "cutIn";
-  const cutInAnimationName = scene?.actions?.cutIn?.animation;
+  const cutInActionName = Object.keys(scene?.actions || {})
+    .find(actionName => normalizedAnimationName(actionName) === "cutin") || "cutIn";
+  const cutInAnimationName = scene?.actions?.[cutInActionName]?.animation;
   const referencedActionNames = new Set(configuredViewportActions
     .filter(actionName => typeof actionName === "string")
-    .filter(actionName => actionName !== "cutIn" && actionName !== cutInActionName)
-    .filter(actionName => scene?.actions?.[actionName]?.animation !== cutInAnimationName));
+    .filter(actionName => actionName !== cutInActionName)
+    .filter(actionName => !cutInAnimationName || scene?.actions?.[actionName]?.animation !== cutInAnimationName));
   const interactiveAnimationNames = new Set([...referencedActionNames]
     .map(actionName => scene?.actions?.[actionName]?.animation || actionName)
     .filter(animationName => typeof animationName === "string")
@@ -1065,15 +1079,6 @@ function calculateAnimationVisibleBounds() {
       size: new spine.Vector2(target.maxX - target.minX, target.maxY - target.minY)
     }
     : undefined;
-  const expandBounds = (bounds, factor = 0.1) => {
-    if (!bounds) return undefined;
-    const horizontal = bounds.size.x * factor;
-    const vertical = bounds.size.y * factor;
-    return {
-      offset: new spine.Vector2(bounds.offset.x - horizontal, bounds.offset.y - vertical),
-      size: new spine.Vector2(bounds.size.x + horizontal * 2, bounds.size.y + vertical * 2)
-    };
-  };
   try {
     const animations = sourceSkeleton.data.animations;
     for (const animation of animations) {
@@ -1105,13 +1110,13 @@ function calculateAnimationVisibleBounds() {
     .filter(([animationName]) => interactiveAnimationNames.has(animationName))
     .map(([animationName, target]) => {
       const bounds = toBounds(target);
-      return [animationName, animationName === idleAnimationName ? bounds : expandBounds(bounds)];
+      return [animationName, bounds];
     })
     .filter(([, bounds]) => bounds));
   return { idle, animations, interactiveAnimationNames };
 }
 
-function calculateAdaptiveWindowSize(bounds) {
+function calculateAdaptiveWindowSize(bounds, viewportBounds = bounds) {
   if (!bounds?.size?.x || !bounds.size.y) return undefined;
   const chromeHeight = 0;
   const maxWidth = scene.window.baseWidth;
@@ -1126,9 +1131,43 @@ function calculateAdaptiveWindowSize(bounds) {
     contentHeight = maxContentHeight;
     width = contentHeight * contentAspect;
   }
+  const worldUnitsPerPixel = Math.max(bounds.size.x / width, bounds.size.y / contentHeight);
+  width = Math.max(width, viewportBounds.size.x / worldUnitsPerPixel);
+  contentHeight = Math.max(contentHeight, viewportBounds.size.y / worldUnitsPerPixel);
   return {
     width: Math.max(scene.window.minWidth ?? 360, Math.ceil(width)),
     height: Math.max(scene.window.minHeight ?? 260, Math.ceil(contentHeight + chromeHeight))
+  };
+}
+
+function mergeViewportBounds(boundsList) {
+  const validBounds = boundsList.filter(Boolean);
+  if (validBounds.length === 0) return undefined;
+  const minX = Math.min(...validBounds.map(bounds => bounds.offset.x));
+  const minY = Math.min(...validBounds.map(bounds => bounds.offset.y));
+  const maxX = Math.max(...validBounds.map(bounds => bounds.offset.x + bounds.size.x));
+  const maxY = Math.max(...validBounds.map(bounds => bounds.offset.y + bounds.size.y));
+  return {
+    offset: new spine.Vector2(minX, minY),
+    size: new spine.Vector2(maxX - minX, maxY - minY)
+  };
+}
+
+function limitViewportExpansion(idleBounds, candidateBounds, configuredRatio = 0.35) {
+  if (!idleBounds || !candidateBounds) return candidateBounds;
+  const ratio = Math.max(0, Math.min(2, Number(configuredRatio) || 0.35));
+  const idleLeft = idleBounds.offset.x;
+  const idleTop = idleBounds.offset.y;
+  const idleRight = idleLeft + idleBounds.size.x;
+  const idleBottom = idleTop + idleBounds.size.y;
+  const minX = Math.max(candidateBounds.offset.x, idleLeft - idleBounds.size.x * ratio);
+  const minY = Math.max(candidateBounds.offset.y, idleTop - idleBounds.size.y * ratio);
+  const maxX = Math.min(candidateBounds.offset.x + candidateBounds.size.x, idleRight + idleBounds.size.x * ratio);
+  const maxY = Math.min(candidateBounds.offset.y + candidateBounds.size.y, idleBottom + idleBounds.size.y * ratio);
+  if (maxX <= minX || maxY <= minY) return idleBounds;
+  return {
+    offset: new spine.Vector2(minX, minY),
+    size: new spine.Vector2(maxX - minX, maxY - minY)
   };
 }
 
@@ -1147,23 +1186,23 @@ function fitSkeletonToWindow() {
   const sampledBounds = calculateAnimationVisibleBounds();
   const idleBounds = sampledBounds?.idle || getVisibleSkeletonBounds();
   if (!idleBounds) return;
-  const { offset, size } = idleBounds;
+  const stableViewportBounds = scene.window.adaptiveToContent
+    ? mergeViewportBounds([
+      idleBounds,
+      ...Object.values(sampledBounds?.animations || {})
+        .map(bounds => limitViewportExpansion(idleBounds, bounds, scene.viewport?.maxInteractiveExpansion))
+    ])
+    : idleBounds;
+  const { offset, size } = stableViewportBounds;
   const idleViewport = { x: offset.x, y: offset.y, width: size.x, height: size.y };
   if (!isValidViewport(idleViewport)) {
     petLog(`Invalid sampled viewport: ${JSON.stringify(idleViewport)}`);
     return;
   }
   baseViewport = idleViewport;
-  animationViewports = Object.fromEntries(Object.entries(sampledBounds?.animations || {})
-    .map(([animationName, bounds]) => [animationName, {
-      x: bounds.offset.x,
-      y: bounds.offset.y,
-      width: bounds.size.x,
-      height: bounds.size.y
-    }])
-    .filter(([, viewport]) => isValidViewport(viewport)));
+  animationViewports = {};
   if (scene.window.adaptiveToContent && idleBounds.size.x > 0 && idleBounds.size.y > 0) {
-    const idleWindowSize = calculateAdaptiveWindowSize(idleBounds);
+    const idleWindowSize = calculateAdaptiveWindowSize(idleBounds, stableViewportBounds);
     adaptiveWindowSize = {
       width: idleWindowSize.width,
       height: idleWindowSize.height
@@ -1172,6 +1211,43 @@ function fitSkeletonToWindow() {
     adaptiveWindowSize = undefined;
   }
   applySceneScale();
+}
+
+function buildAppearanceSelector(availableSkinNames = []) {
+  const state = window.AsterPet.resolveAppearanceVariants({
+    sceneId: scene.id,
+    sceneCatalog,
+    availableSkinNames,
+    selectedSkin: uiState.appearanceByScene?.[scene.id]
+  });
+  appearanceOptions = new Map(state.options.map(option => [option.id, option]));
+  appearanceSelect.replaceChildren(...state.options.map(option => new Option(option.label, option.id)));
+  appearanceSelect.value = state.selectedId || "";
+  appearanceSelect.hidden = state.options.length <= 1;
+  appearanceSelect.disabled = state.options.length <= 1;
+  appearanceSelect.title = state.options.length > 1 ? "选择角色外观" : "当前角色没有其他外观";
+  return appearanceOptions.get(state.selectedId) || appearanceOptions.values().next().value;
+}
+
+async function selectAppearance(optionId) {
+  const option = appearanceOptions.get(optionId);
+  if (!option || !scene) return;
+  if (option.driver === "scene") {
+    const appearanceByScene = { ...uiState.appearanceByScene };
+    if (option.skin) appearanceByScene[option.sceneId] = option.skin;
+    const variantSceneByFamily = { ...uiState.variantSceneByFamily, [option.familyId]: option.sceneId };
+    await persistUiState({ selectedScene: option.sceneId, appearanceByScene, variantSceneByFamily });
+    setMousePassthrough(false);
+    if (option.sceneId !== scene.id) window.desktopPet.switchScene(option.sceneId);
+    return;
+  }
+  if (!option.skin || !player?.skeleton?.data?.findSkin(option.skin)) return;
+  player.skeleton.setSkinByName(option.skin);
+  player.skeleton.setSlotsToSetupPose();
+  uiState.appearanceByScene[scene.id] = option.skin;
+  void persistUiState({ appearanceByScene: uiState.appearanceByScene });
+  applyLayerVisibility();
+  fitSkeletonToWindow();
 }
 
 async function initializePlayer() {
@@ -1230,13 +1306,11 @@ async function initializePlayer() {
     animationNames = player.skeleton.data.animations.map(animation => animation.name);
     normalizeSceneActions();
     const skinNames = player.skeleton.data.skins.map(skin => skin.name).filter(name => name !== "default");
-    for (const skinName of skinNames) {
-      const option = document.createElement("option");
-      option.value = skinName;
-      option.textContent = skinName;
-      skinSelect.append(option);
+    const selectedAppearance = buildAppearanceSelector(skinNames);
+    if (selectedAppearance?.skin && player.skeleton.data.findSkin(selectedAppearance.skin)) {
+      player.skeleton.setSkinByName(selectedAppearance.skin);
+      player.skeleton.setSlotsToSetupPose();
     }
-    if (skinNames.length > 0) player.skeleton.setSkinByName(skinNames[0]);
     for (const animationName of animationNames) {
       const option = document.createElement("option");
       option.value = animationName;
@@ -1293,9 +1367,7 @@ function initializeImageSequence() {
   sequenceImage.draggable = false;
   spinePlayerHost.setVisible(false);
   document.getElementById("player").append(sequenceImage);
-  const skinOption = document.createElement("option");
-  skinOption.textContent = "CG";
-  skinSelect.append(skinOption);
+  buildAppearanceSelector();
   for (const name of animationNames) {
     const option = document.createElement("option");
     option.value = name;
@@ -1369,6 +1441,7 @@ window.desktopPet.onPrepareShutdown(async () => {
   shutdownPrepared = true;
   petLog("Preparing renderer shutdown");
   await disposeScene({ shutdown: true });
+  window.desktopPet.shutdownWaylandBridge?.();
   window.desktopPet.shutdownReady();
 });
 window.addEventListener("beforeunload", () => {

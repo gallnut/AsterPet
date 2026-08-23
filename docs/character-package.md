@@ -110,6 +110,77 @@ pnpm validate:layers
 
 迁移器会读取 Spine 骨骼中的完整 slot 列表，使用内置规则生成精确清单，并将所有未识别项归入“其他”。已有标准元数据默认保留，只有显式传入 `--force` 才会重新生成。`validate:layers` 会检查每个 Spine slot 是否恰好拥有一个归属，并报告不存在或遗漏的 slot。自动迁移是整理旧包的起点；发布前仍应由资源作者检查人物部件和模型特有配件的归属。
 
+## 统一外观变体
+
+AsterPet 把用户眼中的服装、造型和阶段统一称为“外观变体”，但允许资源采用两种底层实现：
+
+- 多场景实现：每套外观使用独立 Spine 骨骼文件。相同 `characterId`、相同 `category` 且声明相同 `appearance.id`（旧资源则标题相同）的场景，会聚合为一张逻辑场景卡，并在该卡的外观选择器中作为变体，适合 BD 一类资源。
+- Spine skin 实现：同一骨骼内使用多个 skin。适合 H 一类包含 `LV1`、`LV2` 等 skin 的资源。
+
+工具栏只展示一个“外观”选择器。多场景外观会切换场景，skin 外观只切换当前骨骼的 skin；用户不需要理解资源内部采用哪种方式。场景可在 `scene.json` 中使用 `asterpet.appearance/v1` 提供稳定 ID 和可读名称。
+
+独立场景外观只需声明本场景的外观身份。若同一逻辑外观由多个独立场景文件组成，可在每个文件中声明相同的 `appearance.id`，并用 `variant` 声明工具栏中的变体名称：
+
+```json
+{
+  "appearance": {
+    "format": "asterpet.appearance/v1",
+    "id": "nightmare",
+    "label": "惊悚之梦"
+  }
+}
+```
+
+```json
+{
+  "appearance": {
+    "format": "asterpet.appearance/v1",
+    "id": "nightmare",
+    "label": "惊悚之梦",
+    "variant": { "id": "palette-1", "label": "变体 1" }
+  }
+}
+```
+
+同一骨骼包含多个 skin 时，在同一声明中建立显式映射：
+
+```json
+{
+  "appearance": {
+    "format": "asterpet.appearance/v1",
+    "id": "standard",
+    "label": "标准造型",
+    "defaultVariant": "level-1",
+    "variants": [
+      { "id": "level-1", "label": "阶段 1", "skin": "LV1" },
+      { "id": "level-1-m", "label": "阶段 1 · M", "skin": "LV1_M" },
+      { "id": "level-2", "label": "阶段 2", "skin": "LV2" }
+    ]
+  }
+}
+```
+
+`appearance.id` 和 `variants[].id` 是资源内稳定标识，`label` 是面向用户的名称，`skin` 必须与 Spine 文件中的 skin 名完全一致。同一人物包中，如果多份技术场景只是同一外观的不同编码或贴图组合，应声明相同的 `appearance.id`，选择器会把它们聚合成一个外观；真正不同的造型必须使用不同 ID。
+
+未声明 `appearance` 的旧资源仍可运行：程序会从场景标题推断并聚合同名的多场景外观，同时直接使用 Spine skin 原名；正式发布的新资源应显式声明，避免把 `LV1` 或哈希场景 ID 暴露给用户。
+
+场景面板展示逻辑场景，而不是底层文件。逻辑场景卡的收藏会覆盖族内全部变体；工具栏外观选择器才展示该场景族的变体。
+
+## 动作视口上限
+
+`window.adaptiveToContent` 开启时，程序会预先采样 idle 和交互动作并使用固定相机。为避免大型特效把窗口无限撑大，可配置相对 idle 的最大扩展比例：
+
+```json
+{
+  "viewport": {
+    "padding": "4%",
+    "maxInteractiveExpansion": 0.35
+  }
+}
+```
+
+默认值为 `0.35`，表示每个方向最多比 idle 多预留 35%；超过部分允许裁切，不会在动作期间缩放人物或切换相机。
+
 ## 管理已安装资源包
 
 打开桌宠工具栏中的“资源”，可以查看当前已安装的人物包及其场景数量。用户导入的包支持勾选后批量删除；项目内置包会标记为“内置”并不可删除。正在使用的当前场景所属包需要先切换到其他场景，才能删除。
@@ -127,6 +198,7 @@ Spine 场景可以通过 `behavior` 声明待机状态图、动作表情配方�
     "minIntervalMs": 7000,
     "maxIntervalMs": 16000,
     "mixDuration": 0.22,
+    "agentTrack": 2,
     "ambient": [
       { "animation": "90_Emo1_normal", "weight": 3, "track": 1, "holdMs": 2400 },
       { "animation": "90_Emo4_happy", "weight": 2, "track": 1, "holdMs": 2400 },
@@ -147,7 +219,9 @@ Spine 场景可以通过 `behavior` 声明待机状态图、动作表情配方�
 }
 ```
 
-`ambient` 可以使用动画名字符串，也可以使用带 `weight`、`track`、`mode`、`holdMs` 的对象。表情轨道至少保留 `max(动画完整时长, holdMs)`，因此单帧表情不会一闪而过，正常动画也不会被提前截断。完整身体动作必须使用 `mode: "base"`；它会从 Idle 进入并完整返回 Idle。未提供 `behavior.ambient` 时，运行器自动推断表情候选，并把 `sleep`、`dizzy`、`yawn`、`stretch` 识别成低频身体状态。
+`ambient` 可以使用动画名字符串，也可以使用带 `weight`、`track`、`mode`、`holdMs` 的对象。表情轨道至少保留 `max(动画完整时长, holdMs)`，因此单帧表情不会一闪而过，正常动画也不会被提前截断。完整身体动作必须使用 `mode: "base"`；它会从 Idle 进入并完整返回 Idle。未提供 `behavior.ambient` 时，运行器只自动推断 `dizzy`、`yawn`、`stretch` 等低频身体状态；`sleep` 不会自动加入，因为旧资源中它经常只是静态姿态。确实需要自动播放睡眠动作的资源，必须在 `behavior.ambient` 中显式声明。`agentTrack` 默认为 `2`，用于外部 AI 的说话叠加。
+
+自动编排会根据资源动画结构使用不同轨道：轨道 0 保留 idle、motion 和完整身体待机变体；轨道 1 播放 `_faceN`、表情和眨眼等表情；轨道 2 预留给 `_faceN_talk` 或其他说话叠加。表情轨道结束后保持最后一个有效表情，不清空回 setup pose，避免资源没有在 idle 中重复设置面部 attachment 时出现脸部消失。`_faceN_talk` 不会被当成随机表情，避免说话口型在无人说话时持续播放。资源提供 `behavior` 时，以资源声明为准。
 
 `actionRecipes` 为身体动作选择语义匹配的表情轨道，候选项支持字符串或带 `animation`、`weight`、`track`、`holdMs`、`mixDuration` 的对象；同一动作会避免连续选择相同表情。未配置时，运行器按 happy/shame/worry、panic/sad、angry/serious 等名称为 Touch、Damage、Dead、CutIn 自动建立配方。`agentOverlays` 把外部 AI 状态映射到持续叠加动画，默认将 `streaming` 和 `speaking` 映射到名称包含 `talk` 的动画。所有选择与恢复都发生在动作边界并使用定时器，不增加逐帧计算。
 

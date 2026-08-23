@@ -1,5 +1,14 @@
 const { contextBridge, ipcRenderer } = require("electron");
 
+let waylandBridge;
+if (process.platform === "linux" && process.env.ASTERPET_WAYLAND_BRIDGE) {
+  try {
+    waylandBridge = require(process.env.ASTERPET_WAYLAND_BRIDGE);
+  } catch {
+    waylandBridge = undefined;
+  }
+}
+
 contextBridge.exposeInMainWorld("desktopPet", {
   nativeWayland: process.platform === "linux"
     && (process.env.ELECTRON_OZONE_PLATFORM_HINT || "").toLowerCase() !== "x11"
@@ -31,6 +40,7 @@ contextBridge.exposeInMainWorld("desktopPet", {
     return () => ipcRenderer.removeListener("pet:prepare-shutdown", handler);
   },
   shutdownReady: () => ipcRenderer.send("pet:shutdown-ready"),
+  shutdownWaylandBridge: () => waylandBridge?.shutdown?.(),
   importCharacterPackage: () => ipcRenderer.invoke("pet:import-character-package"),
   getPackages: () => ipcRenderer.invoke("pet:get-packages"),
   deletePackages: request => ipcRenderer.invoke("pet:delete-packages", request),

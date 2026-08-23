@@ -37,6 +37,7 @@ void wayland_append_bytes(uint8_t *buffer, size_t *buffer_length, size_t capacit
 void wayland_append_iovecs(uint8_t *buffer, size_t *buffer_length, size_t capacity,
                            const struct iovec *iovecs, size_t iovec_count, size_t byte_count);
 bool wayland_bridge_set_input_region(const WaylandInputRect *rects, uint32_t rect_count);
+void wayland_bridge_shutdown(void);
 bool wayland_bridge_begin_move(void);
 bool wayland_bridge_request_window_menu(void);
 WaylandBridgeDebugState wayland_bridge_debug_state(void);

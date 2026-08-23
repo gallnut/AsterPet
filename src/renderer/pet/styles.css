@@ -88,7 +88,7 @@ body.native-wayland #interaction-layer {
   bottom: 8px;
   left: 10px;
   display: none;
-  grid-template-columns: 42px 64px 42px 42px minmax(70px, 1fr) 34px;
+  grid-template-columns: 34px minmax(44px, 1fr) 42px 42px minmax(54px, 1fr) 30px;
   grid-template-rows: 30px 30px 30px;
   gap: 5px;
   padding: 6px;
@@ -122,11 +122,20 @@ select {
   white-space: nowrap;
 }
 
-#skins {
+#toolbar > * {
+  min-width: 0;
+}
+
+#toolbar button,
+#toolbar select {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+#appearances {
   grid-column: 2;
   grid-row: 1;
-  width: 64px;
-  min-width: 64px;
+  width: 100%;
 }
 
 #previous {
@@ -158,13 +167,12 @@ select {
   grid-column: 5;
   grid-row: 1;
   width: 100%;
-  min-width: 70px;
 }
 
 #next {
   grid-column: 6;
   grid-row: 1;
-  width: 34px;
+  width: 30px;
 }
 
 #zoom-out {
@@ -192,6 +200,7 @@ select {
 #close {
   grid-column: 6;
   grid-row: 2;
+  width: 30px;
 }
 
 #chat-toggle { grid-column: 4 / span 3; grid-row: 3; }
@@ -216,6 +225,7 @@ select {
   width: var(--utility-panel-width);
   max-height: min(360px, calc(100% - 100px));
   padding: 10px;
+  overflow-x: hidden;
   overflow-y: auto;
   border: 1px solid rgba(255, 255, 255, 0.18);
   border-radius: 12px;
@@ -223,6 +233,29 @@ select {
   background: rgba(18, 18, 25, 0.92);
   backdrop-filter: blur(10px);
   overscroll-behavior: contain;
+}
+
+#scene-panel {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.42) transparent;
+}
+
+#scene-panel::-webkit-scrollbar {
+  width: 3px;
+}
+
+#scene-panel::-webkit-scrollbar-track {
+  margin: 10px 0;
+  background: transparent;
+}
+
+#scene-panel::-webkit-scrollbar-thumb {
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.42);
+}
+
+#scene-panel::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.62);
 }
 
 body.native-wayland #props-panel,
@@ -309,12 +342,16 @@ body.native-wayland #ai-panel {
 .scene-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .scene-heading .panel-title { margin: 0; }
 #scene-filter { width: auto; min-width: 92px; margin: 0; padding: 3px 6px; font-size: 11px; }
-.scene-option-row { display: flex; align-items: center; gap: 4px; margin-top: 6px; }
+.scene-option-row { display: flex; align-items: center; gap: 4px; min-width: 0; margin-top: 6px; }
 .scene-option {
+  display: block;
   flex: 1;
   min-width: 0;
+  overflow: hidden;
   padding: 0 10px;
+  text-overflow: ellipsis;
   text-align: left;
+  white-space: nowrap;
 }
 
 .scene-option.active {
@@ -335,6 +372,9 @@ body.native-wayland #ai-panel {
   cursor: pointer;
   font-size: 12px;
   font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .scene-group + .scene-group {

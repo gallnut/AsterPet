@@ -453,6 +453,27 @@ class WindowManager {
     this.shutdownWaiter?.();
   }
 
+  closeWindowAndWait(window, label) {
+    if (!window || window.isDestroyed()) return Promise.resolve();
+    return new Promise(resolve => {
+      let settled = false;
+      const finish = () => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timeout);
+        resolve();
+      };
+      const timeout = setTimeout(() => {
+        this.log(`Window close timed out: ${label}`);
+        if (!window.isDestroyed()) window.destroy();
+        finish();
+      }, 3000);
+      window.once("closed", finish);
+      window.close();
+      if (window.isDestroyed()) finish();
+    });
+  }
+
   async shutdown() {
     if (!this.petWindow || this.petWindow.isDestroyed()) return;
     await new Promise(resolve => {
@@ -469,11 +490,14 @@ class WindowManager {
       this.log("Requested renderer shutdown cleanup");
       this.petWindow.webContents.send("pet:prepare-shutdown");
     });
-    for (const window of [this.popoverWindow, this.statusWindow, this.petWindow]) {
-      if (window && !window.isDestroyed()) window.close();
-    }
+    await this.closeWindowAndWait(this.popoverWindow, "popover");
+    await this.closeWindowAndWait(this.statusWindow, "status");
+    await this.closeWindowAndWait(this.petWindow, "pet");
+    this.popoverWindow = undefined;
+    this.statusWindow = undefined;
+    this.petWindow = undefined;
     this.log("Closed application windows after renderer cleanup");
-    await new Promise(resolve => setTimeout(resolve, 500));
+    await new Promise(resolve => setTimeout(resolve, 1500));
   }
 
   setVisualBounds(bounds) {

@@ -2,6 +2,7 @@ const crypto = require("node:crypto");
 const fs = require("node:fs");
 const path = require("node:path");
 const { pathToFileURL } = require("node:url");
+const { validateAppearanceMetadata } = require("./appearance-metadata");
 const { installPackage, listPackages, removePackage } = require("./package-store");
 const { validateLayerMetadata } = require("./layer-metadata");
 
@@ -13,7 +14,27 @@ class SceneRepository {
     this.net = net;
     this.log = log;
     this.assetRoots = new Map();
+    this.sceneMetadataCache = new Map();
     this.index = undefined;
+  }
+
+  readSceneMetadata(configPath, sceneId) {
+    try {
+      const stat = fs.statSync(configPath);
+      const signature = `${stat.size}:${stat.mtimeMs}`;
+      const cached = this.sceneMetadataCache.get(configPath);
+      if (cached?.signature === signature) return cached.metadata;
+      const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
+      const metadata = {
+        title: typeof config.title === "string" ? config.title : undefined,
+        appearance: validateAppearanceMetadata(config.appearance, `场景 ${sceneId} appearance`)
+      };
+      this.sceneMetadataCache.set(configPath, { signature, metadata });
+      return metadata;
+    } catch (error) {
+      this.log(`Unable to read scene metadata ${sceneId}: ${error.message}`);
+      return {};
+    }
   }
 
   registerProtocol() {
@@ -54,16 +75,20 @@ class SceneRepository {
         scenes: manifest.scenes.map(scene => ({ id: scene.id, category: scene.category }))
       };
       for (const scene of manifest.scenes || []) {
+        const configPath = path.join(packageDirectory, scene.config);
+        const sceneMetadata = this.readSceneMetadata(configPath, scene.id);
         index.manifest.scenes[scene.id] = scene.config;
         index.catalog[scene.id] = {
           characterId: manifest.characterId,
           category: scene.category,
-          title: manifest.title,
+          title: sceneMetadata.title || manifest.title,
+          characterTitle: manifest.title,
+          appearance: sceneMetadata.appearance,
           packageId
         };
         index.configs[scene.id] = {
           packageDirectory,
-          configPath: path.join(packageDirectory, scene.config)
+          configPath
         };
       }
     }
@@ -97,6 +122,7 @@ class SceneRepository {
     if (packageScene) {
       const config = JSON.parse(fs.readFileSync(packageScene.configPath, "utf8"));
       validateLayerMetadata(config.layers, `场景 ${sceneId} layers`);
+      validateAppearanceMetadata(config.appearance, `场景 ${sceneId} appearance`);
       this.resolveSceneAssets(config, packageScene.packageDirectory);
       return config;
     }

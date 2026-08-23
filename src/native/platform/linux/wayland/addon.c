@@ -50,6 +50,13 @@ static napi_value begin_move(napi_env env, napi_callback_info info) {
   return boolean_result(env, wayland_bridge_begin_move());
 }
 
+static napi_value shutdown_bridge(napi_env env, napi_callback_info info) {
+  (void)env;
+  (void)info;
+  wayland_bridge_shutdown();
+  return boolean_result(env, true);
+}
+
 static napi_value request_window_menu(napi_env env, napi_callback_info info) {
   (void)info;
   return boolean_result(env, wayland_bridge_request_window_menu());
@@ -85,6 +92,8 @@ NAPI_MODULE_INIT() {
   napi_value function;
   napi_create_function(env, "beginMove", NAPI_AUTO_LENGTH, begin_move, NULL, &function);
   napi_set_named_property(env, exports, "beginMove", function);
+  napi_create_function(env, "shutdown", NAPI_AUTO_LENGTH, shutdown_bridge, NULL, &function);
+  napi_set_named_property(env, exports, "shutdown", function);
   napi_create_function(env, "requestWindowMenu", NAPI_AUTO_LENGTH, request_window_menu, NULL, &function);
   napi_set_named_property(env, exports, "requestWindowMenu", function);
   napi_create_function(env, "setInputRegion", NAPI_AUTO_LENGTH, set_input_region, NULL, &function);

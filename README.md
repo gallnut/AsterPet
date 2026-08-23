@@ -8,7 +8,7 @@ AsterPet 是配置驱动、跨平台的透明 Electron + Spine 4.1 桌面伴侣�
 - 将人物资源安装到当前用户的 `~/.asterpet/content`。
 - 支持 Spine 动画与图片序列场景。
 - 透明像素穿透、人物拖动、缩放和动态窗口裁切。
-- 场景、动画、皮肤、道具分类与逐项显示控制。
+- 场景、动画、统一外观变体、道具分类与逐项显示控制。
 - 资源驱动的待机状态图、动作表情配方与外部 AI Talk 叠加。
 - 通过可插拔外部 AI Driver 显示会话状态、权限申请与结构化问题；内置 DSH Driver。
 - 对话框支持可安装、可切换的 `.asterpet-theme` 皮肤包。
@@ -57,7 +57,7 @@ AsterPet 的领域层只依赖通用外部 AI Driver。内置 DSH Driver 默认�
 
 ## 配置与多实例
 
-用户配置统一保存在 `~/.asterpet/config.json`，其中 `ui.selectedScene` 保存当前场景，`ui.propVisibility` 保存每个场景的图层启用状态，`ui.favoriteSceneIds` 保存收藏的可播放场景；外部 AI 和对话皮肤选择也保存在同一个文件中。Renderer 不再把运行状态作为最终数据写入 Chromium `localStorage`，旧版本遗留的键只在首次启动时迁移一次。
+用户配置统一保存在 `~/.asterpet/config.json`，其中 `ui.selectedScene` 保存当前场景，`ui.propVisibility` 保存每个场景的图层启用状态，`ui.favoriteSceneIds` 保存收藏的可播放场景，`ui.appearanceByScene` 保存场景内 Spine skin 外观选择；外部 AI 和对话皮肤选择也保存在同一个文件中。Renderer 不再把运行状态作为最终数据写入 Chromium `localStorage`，旧版本遗留的键只在首次启动时迁移一次。
 
 请使用项目提供的 `pnpm start` 启动。程序使用单实例锁，重复启动只会唤醒已经运行的实例，不会创建第二份互相覆盖状态的窗口。测试启动请使用 `PET_TEST=1 pnpm start`，测试状态不会写入正式配置。
 

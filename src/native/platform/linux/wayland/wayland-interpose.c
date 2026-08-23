@@ -21,6 +21,7 @@ static recvmsg_fn real_recvmsg;
 static close_fn real_close;
 static ConnectionState connections[MAX_CONNECTIONS];
 static pthread_mutex_t state_mutex = PTHREAD_MUTEX_INITIALIZER;
+static bool bridge_shutting_down;
 uint32_t captured_connection_count;
 uint32_t captured_pointer_count;
 uint32_t captured_toplevel_count;
@@ -131,7 +132,7 @@ static void parse_outgoing_message(ConnectionState *state, const uint8_t *messag
       if (!region_id) pet_surface_null_region_count++;
       state->last_pet_region_id = region_id;
     }
-  } else if (object_type == OBJECT_REGION && opcode == WL_REGION_DESTROY) {
+  } else if (!bridge_shutting_down && object_type == OBJECT_REGION && opcode == WL_REGION_DESTROY) {
     if (object_id == state->last_pet_region_id) state->pending_input_region_id = object_id;
   } else if (object_type == OBJECT_SEAT && opcode == WL_SEAT_GET_POINTER && payload_length >= 4) {
     uint32_t pointer_id = read_uint32(payload);
@@ -344,6 +345,7 @@ static bool capture_input_region_id(ConnectionState *state, uint32_t region_id) 
 }
 
 static size_t filter_incoming_delete_id(ConnectionState *state, uint8_t *bytes, size_t length) {
+  if (bridge_shutting_down) return length;
   size_t read_offset = 0;
   size_t write_offset = 0;
   while (read_offset + 8 <= length) {
@@ -486,6 +488,7 @@ static bool apply_pending_input_region(ConnectionState *state) {
 }
 
 bool wayland_bridge_set_input_region(const WaylandInputRect *rects, uint32_t rect_count) {
+  if (bridge_shutting_down) return false;
   bool applied = false;
   bool queued = false;
   pthread_mutex_lock(&state_mutex);
@@ -509,6 +512,7 @@ bool wayland_bridge_set_input_region(const WaylandInputRect *rects, uint32_t rec
 }
 
 bool wayland_bridge_begin_move(void) {
+  if (bridge_shutting_down) return false;
   bool armed = false;
   pthread_mutex_lock(&state_mutex);
   for (size_t index = 0; index < MAX_CONNECTIONS && !armed; index++) {
@@ -523,6 +527,7 @@ bool wayland_bridge_begin_move(void) {
 }
 
 bool wayland_bridge_request_window_menu(void) {
+  if (bridge_shutting_down) return false;
   bool opened = false;
   pthread_mutex_lock(&state_mutex);
   for (size_t index = 0; index < MAX_CONNECTIONS && !opened; index++) {
@@ -530,6 +535,17 @@ bool wayland_bridge_request_window_menu(void) {
   }
   pthread_mutex_unlock(&state_mutex);
   return opened;
+}
+
+void wayland_bridge_shutdown(void) {
+  pthread_mutex_lock(&state_mutex);
+  bridge_shutting_down = true;
+  for (size_t index = 0; index < MAX_CONNECTIONS; index++) {
+    ConnectionState *state = &connections[index];
+    state->pending_rect_count = 0;
+    state->pending_input_region_id = 0;
+  }
+  pthread_mutex_unlock(&state_mutex);
 }
 
 WaylandBridgeDebugState wayland_bridge_debug_state(void) {

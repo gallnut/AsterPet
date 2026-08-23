@@ -1,7 +1,9 @@
 (function registerAmbientBehaviorDirector() {
   const DEFAULT_OVERLAY_INCLUDE = /(emo|emotion|expression|facial|blink|eyeclose)/i;
-  const DEFAULT_OVERLAY_EXCLUDE = /(idle|attack|damage|dead|death|touch|tap|cut[ _-]?in|skill|hit|hurt|die|talk|dizzy|sleep|yawn)/i;
-  const DEFAULT_BASE_INCLUDE = /(sleep|dizzy|yawn|stretch)/i;
+  const DEFAULT_OVERLAY_EXCLUDE = /(idle|attack|damage|dead|death|touch|tap|cut[ _-]?in|skill|hit|hurt|die|talk|dizzy|sleep|yawn|stretch|motion)/i;
+  const DEFAULT_BASE_INCLUDE = /(dizzy|yawn|stretch|(?:default|feeling)[a-z0-9_-]*idle|idle[_-]?save)/i;
+  const DEFAULT_FACE = /^_?face\d+$/i;
+  const DEFAULT_FACE_TALK = /^_?face\d+[_-]?talk$/i;
 
   class AmbientBehaviorDirector {
     constructor({ getPlayer, getScene, getAnimationNames, canPlay, onAnimation, log }) {
@@ -63,7 +65,7 @@
     interruptOverlay() {
       clearTimeout(this.overlayTimer);
       this.overlayTimer = undefined;
-      if (this.activeOverlayTrack !== undefined) {
+      if (this.activeOverlayTrack !== undefined && this.activeOverlayTrack !== 1) {
         this.clearOverlayTrack(this.activeOverlayTrack, this.settings?.mixDuration ?? 0.22);
       }
       this.activeOverlayTrack = undefined;
@@ -72,6 +74,10 @@
     clearOverlayTrack(track, mixDuration) {
       const animationState = this.getPlayer()?.animationState;
       if (!animationState) return;
+      if (track === 1) {
+        this.activeOverlayTrack = undefined;
+        return;
+      }
       const cleanupGeneration = ++this.overlayCleanupGeneration;
       animationState.setEmptyAnimation?.(track, mixDuration);
       setTimeout(() => {
@@ -107,12 +113,26 @@
         ? configured
         : [
           ...animationNames
-            .filter(name => DEFAULT_OVERLAY_INCLUDE.test(name) && !DEFAULT_OVERLAY_EXCLUDE.test(name))
-            .map(animation => ({ animation, weight: this.inferredWeight(animation) })),
-          ...animationNames
-            .filter(name => DEFAULT_BASE_INCLUDE.test(name))
+            .filter(name => DEFAULT_FACE.test(name))
             .map(animation => ({
               animation,
+              role: "expression",
+              weight: 0.8,
+              track: 1,
+              holdMs: this.inferredHoldMs(animation)
+            })),
+          ...animationNames
+            .filter(name => DEFAULT_OVERLAY_INCLUDE.test(name)
+              && !DEFAULT_OVERLAY_EXCLUDE.test(name)
+              && !DEFAULT_FACE_TALK.test(name))
+            .map(animation => ({ animation, role: "expression", weight: this.inferredWeight(animation), track: 1 })),
+          ...animationNames
+            .filter(name => DEFAULT_BASE_INCLUDE.test(name)
+              && !DEFAULT_FACE.test(name)
+              && !DEFAULT_FACE_TALK.test(name))
+            .map(animation => ({
+              animation,
+              role: "body",
               weight: this.inferredWeight(animation),
               mode: "base",
               track: 0,
@@ -127,6 +147,7 @@
           weight: Math.max(0.01, Number(entry.weight) || 1),
           track: Math.max(0, Math.round(Number(entry.track) || 1)),
           mode: entry.mode === "base" ? "base" : "overlay",
+          role: entry.role || (entry.mode === "base" ? "body" : "expression"),
           holdMs: Number.isFinite(Number(entry.holdMs))
             ? Math.max(0, Number(entry.holdMs))
             : this.inferredHoldMs(entry.animation)
@@ -142,6 +163,7 @@
     }
 
     inferredHoldMs(animationName) {
+      if (DEFAULT_FACE.test(animationName)) return 5000;
       if (/sleep/i.test(animationName)) return 2400;
       if (/(dizzy|yawn|stretch)/i.test(animationName)) return 0;
       if (/blink/i.test(animationName)) return 300;
