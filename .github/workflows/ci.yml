@@ -38,6 +38,9 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           cache: pnpm
 
+      - name: Install native build dependencies
+        run: sudo apt-get update && sudo apt-get install --no-install-recommends -y build-essential libnode-dev libwayland-dev
+
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
@@ -63,6 +66,9 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: pnpm
+
+      - name: Install native build dependencies
+        run: sudo apt-get update && sudo apt-get install --no-install-recommends -y build-essential libnode-dev libwayland-dev
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
