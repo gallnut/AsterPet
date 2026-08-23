@@ -82,4 +82,4 @@ pnpm check
 
 AsterPet 自有代码采用 [Apache License 2.0](LICENSE)。该许可证不覆盖导入的人物包、游戏资源或第三方组件。
 
-Spine Player 与 Spine Runtimes 适用 Esoteric Software 的独立许可证。源码仓库不替代该许可证；任何发布包含 Spine Runtime 的安装包前，发布者必须自行确认其 Spine Editor/Runtime 授权及再分发条件，并保留 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) 和 `licenses/SPINE-RUNTIMES-LICENSE.txt`。
+Spine Player 与 Spine Runtimes 适用 Esoteric Software 的独立许可证。源码仓库不替代该许可证；任何发布包含 Spine Runtime 的安装包前，发布者必须自行确认其 Spine Editor/Runtime 授权及再分发条件，并保留 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) 和 `licenses/SPINE-RUNTIMES-LICENSE.txt`。源码公开不代表已经获得该授权；在确认前不得向他人提供包含 Spine Runtime 的二进制、安装包或 CI Artifact。当前 CI 永久只做构建验证，不上传二进制 Artifact。

@@ -29,6 +29,7 @@ for (const relativePath of ["package.json", "resources/scenes/layer-rules.json",
 }
 
 run(process.execPath, [path.join(projectRoot, "scripts", "migrate-layer-metadata.mjs"), "--check"]);
+run(process.execPath, [path.join(projectRoot, "scripts", "check-licenses.js")]);
 
 const { resolveControlHost } = require(path.join(projectRoot, "src", "main", "control-server.js"));
 if (resolveControlHost({ DESKTOP_PET_CONTROL_HOST: "0.0.0.0" }) !== "127.0.0.1") {

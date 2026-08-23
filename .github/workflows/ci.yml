@@ -1,0 +1,90 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: asterpet-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: 22
+  PNPM_VERSION: 11.3.0
+
+jobs:
+  check:
+    name: Checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Run repository checks
+        run: pnpm check
+
+  package-linux:
+    name: Package Linux
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    needs: check
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build Linux portable package
+        run: pnpm pack:linux
+
+      - name: Verify package contents
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -x dist/AsterPet-linux-x64/AsterPet
+          test -f dist/AsterPet-linux-x64/AsterPet.bin
+          test -f dist/AsterPet-linux-x64/wayland-drag-bridge.node
+          test -f dist/AsterPet-linux-x64/LICENSE
+          test -f dist/AsterPet-linux-x64/NOTICE
+          test -f dist/AsterPet-linux-x64/THIRD_PARTY_NOTICES.md
+          test -f dist/AsterPet-linux-x64/licenses/ELECTRON-LICENSE.txt
+          test -f dist/AsterPet-linux-x64/licenses/EXTRACT-ZIP-LICENSE.txt
+          test -f dist/AsterPet-linux-x64/licenses/SPINE-RUNTIMES-LICENSE.txt
+          test ! -d dist/AsterPet-linux-x64/content
+          test ! -d dist/AsterPet-linux-x64/assets
+
+      - name: Confirm binary redistribution is disabled
+        run: echo "Binary artifact upload is intentionally disabled; CI only validates the build."
