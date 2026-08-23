@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { createRequire } from "node:module";
 import {
@@ -12,14 +13,26 @@ import {
 const projectRoot = path.resolve(import.meta.dirname, "..");
 const require = createRequire(import.meta.url);
 const { validateLayerMetadata } = require("../src/main/layer-metadata");
-const contentRoots = process.argv.includes("--project-only")
+const rootIndex = process.argv.indexOf("--root");
+const explicitRoot = rootIndex >= 0 ? process.argv[rootIndex + 1] : undefined;
+if (rootIndex >= 0 && !explicitRoot) throw new Error("--root 需要提供内容目录");
+const contentRoots = explicitRoot
+  ? [path.resolve(explicitRoot)]
+  : process.argv.includes("--project-only")
   ? [path.join(projectRoot, "content")]
-  : [path.join(process.env.HOME, ".asterpet", "content"), path.join(projectRoot, "content")];
+  : [path.join(os.homedir(), ".asterpet", "content"), path.join(projectRoot, "content")];
 const writeChanges = process.argv.includes("--write");
 const checkOnly = process.argv.includes("--check");
 const force = process.argv.includes("--force");
 const sceneFilterIndex = process.argv.indexOf("--scene");
 const sceneFilter = sceneFilterIndex >= 0 ? process.argv[sceneFilterIndex + 1] : undefined;
+const scenesFilterIndex = process.argv.indexOf("--scenes");
+const sceneFilters = new Set([
+  ...(sceneFilter ? [sceneFilter] : []),
+  ...(scenesFilterIndex >= 0 && process.argv[scenesFilterIndex + 1]
+    ? process.argv[scenesFilterIndex + 1].split(",").filter(Boolean)
+    : [])
+]);
 const rules = JSON.parse(fs.readFileSync(path.join(projectRoot, "resources", "scenes", "layer-rules.json"), "utf8"));
 
 function compile(patterns) {
@@ -183,6 +196,29 @@ function auditLayerMetadata(layers, slotNames, label) {
   return { classified: owners.size };
 }
 
+function normalizeActions(config, skeletonData, replaceExisting = false) {
+  const names = skeletonData.animations.map(animation => animation.name);
+  if (names.length === 0) throw new Error(`场景 ${config.id} 不包含动画`);
+  const byLowercase = new Map(names.map(name => [name.toLowerCase(), name]));
+  const choose = (current, preferred, fallback) => {
+    if (names.includes(current)) return current;
+    for (const candidate of preferred) {
+      const exactMatch = byLowercase.get(candidate);
+      if (exactMatch) return exactMatch;
+      const prefixMatch = names.find(name => name.toLowerCase().startsWith(candidate));
+      if (prefixMatch) return prefixMatch;
+    }
+    return fallback;
+  };
+  const idle = choose(replaceExisting ? undefined : config.actions?.idle?.animation, ["idle", "loop", "animation", "motion", "action"], names[0]);
+  const touch = choose(replaceExisting ? undefined : config.actions?.touch?.animation, ["motion", "touch", "action", "smile", "animation", "idle"], idle);
+  config.actions = {
+    ...(config.actions || {}),
+    idle: { ...(config.actions?.idle || {}), animation: idle, loop: true },
+    touch: { ...(config.actions?.touch || {}), animation: touch, loop: false }
+  };
+}
+
 function sceneEntries() {
   const entries = [];
   for (const contentRoot of contentRoots) {
@@ -209,10 +245,11 @@ const largestOtherGroups = [];
 const otherPrefixes = new Map();
 for (const entry of sceneEntries()) {
   try {
-    if (sceneFilter && entry.scene.id !== sceneFilter) continue;
+    if (sceneFilters.size > 0 && !sceneFilters.has(entry.scene.id)) continue;
     const config = JSON.parse(fs.readFileSync(entry.configPath, "utf8"));
     if (config.type !== "spine") continue;
     const skeletonData = loadSkeletonData(entry.packageRoot, config);
+    normalizeActions(config, skeletonData, force);
     const slotNames = skeletonData.slots.map(slot => slot.name);
     if (checkOnly || (config.layers?.format === "asterpet.layers/v1" && !force)) {
       auditLayerMetadata(config.layers, slotNames, `场景 ${entry.scene.id} layers`);

@@ -7,6 +7,8 @@
     "^floor\\d*$",
     "^(BG|Slot_BG|Root_BG\\d*|Background|BackGround)$",
     "^BG(?!_Number)",
+    "(^|[_\\s-])BG(?:[_\\s-]|\\d|$)",
+    "^(?:idle|id)\\d*[_\\s-]*(?:back|door|glass|base)(?:[_\\s-]|\\d|$)",
     "^(wall|Room_BG|Scene_BG|BackGround_)",
     "^bg_(floor|wall|pillar|light)",
     "^(Back_Bamboo_\\d+|Bamboo_\\d+|Front_Bamboo_\\d+|Back_Grass|Grass_\\d+_?\\d*|Home|Moon_Light|Leaf_(?:Shadow_)?\\d+|leaf_[a-z].*)$",

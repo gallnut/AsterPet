@@ -42,7 +42,9 @@ function registerIpc({ app, ipcMain, dialog, windows, externalAi, dialogThemes, 
         installed.push({
           packageId: result.manifest.id,
           title: result.manifest.title,
-          sceneId: result.manifest.scenes[0]?.id,
+          sceneId: result.addedScenes[0]?.id || result.manifest.scenes[0]?.id,
+          addedScenes: result.addedScenes.length,
+          skippedScenes: result.skippedScenes.length,
           cacheDirectory: result.destination
         });
       } catch (error) {

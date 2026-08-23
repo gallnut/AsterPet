@@ -105,9 +105,9 @@
         status.textContent = `人物包导入失败：${result?.failed?.[0]?.error || result?.error || "没有导入成功的文件"}`;
         return;
       }
-      status.textContent = result.installed.length === 1
-        ? `已导入 ${result.installed[0].title}`
-        : `已导入 ${result.installed.length} 个资源包`;
+      const addedScenes = result.installed.reduce((total, item) => total + item.addedScenes, 0);
+      const skippedScenes = result.installed.reduce((total, item) => total + item.skippedScenes, 0);
+      status.textContent = `已更新 ${result.installed.length} 个人物：新增 ${addedScenes} 个场景，跳过 ${skippedScenes} 个重复场景`;
       await this.onPackagesChanged?.();
       if (!result.sceneId) return;
       void this.desktopPet.updateUiState({ selectedScene: result.sceneId });

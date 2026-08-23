@@ -92,6 +92,99 @@ function listPackages(contentRoots) {
   return packages;
 }
 
+function hashDirectory(directory, excludedRelativePaths = new Set()) {
+  const digest = crypto.createHash("sha256");
+  const visit = (current, relativeRoot = "") => {
+    const entries = fs.readdirSync(current, { withFileTypes: true })
+      .sort((left, right) => left.name.localeCompare(right.name));
+    for (const entry of entries) {
+      const relativePath = path.posix.join(relativeRoot, entry.name);
+      if (excludedRelativePaths.has(relativePath)) continue;
+      const absolutePath = path.join(current, entry.name);
+      if (entry.isDirectory()) {
+        visit(absolutePath, relativePath);
+      } else if (entry.isFile()) {
+        digest.update(relativePath);
+        digest.update("\0");
+        digest.update(fs.readFileSync(absolutePath));
+        digest.update("\0");
+      }
+    }
+  };
+  visit(directory);
+  return digest.digest("hex");
+}
+
+function sceneResourceDigest(packageRoot, scene) {
+  const config = safeRelative(scene.config, `场景 ${scene.id} 配置`);
+  const sceneRoot = path.dirname(path.join(packageRoot, config));
+  const configName = path.basename(config);
+  return hashDirectory(sceneRoot, new Set([configName]));
+}
+
+function mergePackage(stagingRoot, destination, incomingManifest) {
+  const installedManifest = readManifest(destination, true, { validateSceneConfigs: true });
+  if (installedManifest.id !== incomingManifest.id || installedManifest.characterId !== incomingManifest.characterId) {
+    throw new Error(`包 ${incomingManifest.id} 与已安装人物不匹配，不能增量合并`);
+  }
+
+  const installedById = new Map(installedManifest.scenes.map(scene => [scene.id, scene]));
+  const installedDigests = new Map(
+    installedManifest.scenes.map(scene => [sceneResourceDigest(destination, scene), scene.id])
+  );
+  const addedScenes = [];
+  const skippedScenes = [];
+  for (const incomingScene of incomingManifest.scenes) {
+    const digest = sceneResourceDigest(stagingRoot, incomingScene);
+    const installedScene = installedById.get(incomingScene.id);
+    if (installedScene) {
+      const installedDigest = sceneResourceDigest(destination, installedScene);
+      if (installedDigest !== digest) throw new Error(`场景 ID 冲突但资源不同：${incomingScene.id}`);
+      skippedScenes.push({ id: incomingScene.id, duplicateOf: installedScene.id });
+      continue;
+    }
+    const duplicateOf = installedDigests.get(digest);
+    if (duplicateOf) {
+      skippedScenes.push({ id: incomingScene.id, duplicateOf });
+      continue;
+    }
+    installedDigests.set(digest, incomingScene.id);
+    addedScenes.push(incomingScene);
+  }
+
+  if (addedScenes.length === 0) {
+    return { manifest: installedManifest, destination, addedScenes, skippedScenes, merged: true };
+  }
+
+  const mergeRoot = path.join(path.dirname(stagingRoot), `merge-${crypto.randomUUID()}`);
+  fs.cpSync(destination, mergeRoot, { recursive: true, errorOnExist: true });
+  try {
+    for (const scene of addedScenes) {
+      const relativeSceneRoot = path.dirname(scene.config);
+      const source = path.join(stagingRoot, relativeSceneRoot);
+      const target = path.join(mergeRoot, relativeSceneRoot);
+      if (fs.existsSync(target)) throw new Error(`新增场景目录冲突：${relativeSceneRoot}`);
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      fs.cpSync(source, target, { recursive: true, errorOnExist: true });
+    }
+    const mergedManifest = {
+      ...installedManifest,
+      version: incomingManifest.version || installedManifest.version,
+      scenes: [...installedManifest.scenes, ...addedScenes]
+    };
+    fs.writeFileSync(
+      path.join(mergeRoot, MANIFEST_NAME),
+      `${JSON.stringify(mergedManifest, null, 2)}\n`,
+      "utf8"
+    );
+    const validatedManifest = readManifest(mergeRoot, false, { validateSceneConfigs: true });
+    return { manifest: validatedManifest, destination, mergeRoot, addedScenes, skippedScenes, merged: true };
+  } catch (error) {
+    fs.rmSync(mergeRoot, { recursive: true, force: true });
+    throw error;
+  }
+}
+
 function removePackage(packageId, asterPetHome) {
   const id = safeSegment(packageId, "包 ID");
   const contentRoot = path.resolve(asterPetHome, "content");
@@ -130,16 +223,28 @@ async function installPackage(archivePath, asterPetHome) {
     fs.mkdirSync(contentRoot, { recursive: true });
     const destination = path.join(contentRoot, manifest.id);
     const backup = `${destination}.backup-${crypto.randomUUID()}`;
+    const mergeResult = fs.existsSync(destination)
+      ? mergePackage(stagingRoot, destination, manifest)
+      : {
+          manifest,
+          destination,
+          mergeRoot: stagingRoot,
+          addedScenes: manifest.scenes,
+          skippedScenes: [],
+          merged: false
+        };
+    if (!mergeResult.mergeRoot) return mergeResult;
     if (fs.existsSync(destination)) fs.renameSync(destination, backup);
     try {
-      fs.renameSync(stagingRoot, destination);
+      fs.renameSync(mergeResult.mergeRoot, destination);
       if (fs.existsSync(backup)) fs.rmSync(backup, { recursive: true, force: true });
     } catch (error) {
+      if (fs.existsSync(mergeResult.mergeRoot)) fs.rmSync(mergeResult.mergeRoot, { recursive: true, force: true });
       if (fs.existsSync(destination)) fs.rmSync(destination, { recursive: true, force: true });
       if (fs.existsSync(backup)) fs.renameSync(backup, destination);
       throw error;
     }
-    return { manifest, destination };
+    return { ...mergeResult, destination };
   } finally {
     if (fs.existsSync(stagingRoot)) fs.rmSync(stagingRoot, { recursive: true, force: true });
   }

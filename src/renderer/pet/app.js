@@ -317,8 +317,31 @@ function isInternalSlot(slotName) {
 
 function isLayoutDecorationSlot(slotName) {
   const group = findPropGroup(slotName);
-  if (group?.role === "background" || group?.role === "internal") return true;
+  if (["background", "effect", "interface", "internal"].includes(group?.role)) return true;
   return backgroundPatterns.some(pattern => pattern.test(slotName));
+}
+
+function resolveSlotStagePrefix(slot) {
+  const slotPrefix = slot?.data?.name?.match(/^(?:\(sh\))?([ABCS])_/i)?.[1];
+  if (slotPrefix) return slotPrefix.toUpperCase();
+  for (let bone = slot?.bone; bone; bone = bone.parent) {
+    const bonePrefix = bone.data?.name?.match(/^([ABCS])_/i)?.[1];
+    if (bonePrefix) return bonePrefix.toUpperCase();
+  }
+  return undefined;
+}
+
+function resolveAnimationStagePrefix(targetSkeleton, animationName) {
+  const stageMatch = String(animationName || "").match(/^(?:idle|motion|mix)(\d+)(?:_|$)/i);
+  if (!stageMatch) return undefined;
+  const stageCounts = new Map();
+  for (const slot of targetSkeleton?.slots || []) {
+    const prefix = resolveSlotStagePrefix(slot);
+    if (prefix) stageCounts.set(prefix, (stageCounts.get(prefix) || 0) + 1);
+  }
+  const stages = ["A", "B", "C", "S"].filter(prefix => (stageCounts.get(prefix) || 0) >= 10);
+  if (stages.length < 2) return undefined;
+  return stages[Number(stageMatch[1]) - 1];
 }
 
 function getStoredPropVisibility(sceneId = scene?.id) {
@@ -407,6 +430,10 @@ function addUnclassifiedPropGroup() {
   };
   for (const slot of player.skeleton.slots) {
     const slotName = slot.data.name;
+    if (backgroundPatterns.some(pattern => pattern.test(slotName))) {
+      addSlot({ id: "background", label: "背景与场景", role: "background", defaultVisible: false }, slotName);
+      continue;
+    }
     const packageGroup = propGroups.find(group => group.source === "package"
       && (group.slotNames?.has(slotName) || group.regex?.test(slotName)));
     if (packageGroup) {
@@ -419,10 +446,6 @@ function addUnclassifiedPropGroup() {
     }
     if (explicitInternalSlots.has(slotName)) {
       addSlot(internalGroup, slotName);
-      continue;
-    }
-    if (backgroundPatterns.some(pattern => pattern.test(slotName))) {
-      addSlot({ id: "background", label: "背景与场景", role: "background", defaultVisible: false }, slotName);
       continue;
     }
     const sceneGroup = propGroups.find(group => group.source === "scene-rule"
@@ -688,10 +711,21 @@ async function toggleSceneFavorite(sceneId) {
 
 sceneFilter.addEventListener("change", buildSceneList);
 
-function applyConfiguredLayerVisibility(targetSkeleton) {
+function applyConfiguredLayerVisibility(targetSkeleton, animationName) {
+  const activeAnimation = animationName
+    || (targetSkeleton === player?.skeleton ? player.animationState?.getCurrent(0)?.animation?.name : undefined);
+  const activeStagePrefix = resolveAnimationStagePrefix(targetSkeleton, activeAnimation);
   for (const slotIndex of hiddenLayerSlotIndices) {
     const slot = targetSkeleton.slots[slotIndex];
     if (!slot) continue;
+    slot.color.a = 0;
+    slot.setAttachment(null);
+  }
+  if (!activeStagePrefix) return;
+  for (const slot of targetSkeleton.slots) {
+    const stagePrefix = resolveSlotStagePrefix(slot);
+    const unscopedStageShadow = /^\(sh\)(?![ABCS]_)/i.test(slot.data.name);
+    if ((!stagePrefix || stagePrefix === activeStagePrefix) && !unscopedStageShadow) continue;
     slot.color.a = 0;
     slot.setAttachment(null);
   }
@@ -776,6 +810,12 @@ function resolveAnimationName(requestedName, actionName) {
 
 function normalizeSceneActions() {
   scene.actions = scene.actions || {};
+  const configuredIdleName = scene.actions.idle?.animation;
+  const preferredIdleName = animationNames.find(name => /^(?:idle|inact|stand|wait)(?:\d|_|$)/i.test(name));
+  if (/^loop$/i.test(configuredIdleName) && preferredIdleName) {
+    scene.actions.idle = { ...scene.actions.idle, animation: preferredIdleName, loop: true };
+    petLog(`Scene idle upgraded: ${configuredIdleName} -> ${preferredIdleName}`);
+  }
   const inferredActions = {
     damage: { loop: false },
     dead: { loop: false, holdMs: 200 }
@@ -991,9 +1031,7 @@ function calculateAnimationVisibleBounds() {
   sampledSkeleton.x = sourceSkeleton.x;
   sampledSkeleton.y = sourceSkeleton.y;
 
-  let union;
   let idleUnion;
-  let interactiveUnion;
   const animationUnions = new Map();
   const idleAnimationName = scene?.actions?.idle?.animation;
   const configuredViewportActions = Array.isArray(scene?.viewport?.actions)
@@ -1048,13 +1086,11 @@ function calculateAnimationVisibleBounds() {
         sampledSkeleton.setToSetupPose();
         animation.apply(sampledSkeleton, time, time, false, [], 1, 0, 0);
         sampledSkeleton.updateWorldTransform();
-        applyConfiguredLayerVisibility(sampledSkeleton);
+        applyConfiguredLayerVisibility(sampledSkeleton, animation.name);
         const bounds = getVisibleSkeletonBounds(sampledSkeleton);
         if (!bounds) continue;
-        union = mergeBounds(union, bounds);
         animationUnions.set(animation.name, mergeBounds(animationUnions.get(animation.name), bounds));
         if (animation.name === idleAnimationName) idleUnion = mergeBounds(idleUnion, bounds);
-        if (interactiveAnimationNames.has(animation.name)) interactiveUnion = mergeBounds(interactiveUnion, bounds);
       }
     }
   } catch (error) {
@@ -1063,18 +1099,16 @@ function calculateAnimationVisibleBounds() {
   } finally {
     sampledSkeleton.dispose?.();
   }
-  const all = toBounds(union);
-  if (!all) return undefined;
-  const idle = toBounds(idleUnion) || all;
-  const interactive = toBounds(interactiveUnion) || idle;
+  const idle = toBounds(idleUnion);
+  if (!idle) return undefined;
   const animations = Object.fromEntries([...animationUnions.entries()]
     .filter(([animationName]) => interactiveAnimationNames.has(animationName))
     .map(([animationName, target]) => {
-      const bounds = toBounds(mergeBounds(target, idle));
+      const bounds = toBounds(target);
       return [animationName, animationName === idleAnimationName ? bounds : expandBounds(bounds)];
     })
     .filter(([, bounds]) => bounds));
-  return { all, idle, interactive, animations, interactiveAnimationNames };
+  return { idle, animations, interactiveAnimationNames };
 }
 
 function calculateAdaptiveWindowSize(bounds) {
@@ -1111,20 +1145,23 @@ function isValidViewport(viewport) {
 function fitSkeletonToWindow() {
   player.skeleton.updateWorldTransform();
   const sampledBounds = calculateAnimationVisibleBounds();
-  const idleBounds = sampledBounds?.idle || getVisibleSkeletonBounds() || sampledBounds?.all;
+  const idleBounds = sampledBounds?.idle || getVisibleSkeletonBounds();
   if (!idleBounds) return;
-  const clickActionName = scene.gestures?.click;
-  const clickAnimationName = scene.actions?.[clickActionName]?.animation || clickActionName;
-  const visibleBounds = sampledBounds?.animations?.[clickAnimationName] || idleBounds;
-  const commonBounds = sampledBounds?.all || visibleBounds;
-  const { offset, size } = commonBounds;
-  const commonViewport = { x: offset.x, y: offset.y, width: size.x, height: size.y };
-  if (!isValidViewport(commonViewport)) {
-    petLog(`Invalid sampled viewport: ${JSON.stringify(commonViewport)}`);
+  const { offset, size } = idleBounds;
+  const idleViewport = { x: offset.x, y: offset.y, width: size.x, height: size.y };
+  if (!isValidViewport(idleViewport)) {
+    petLog(`Invalid sampled viewport: ${JSON.stringify(idleViewport)}`);
     return;
   }
-  baseViewport = commonViewport;
-  animationViewports = sampledBounds?.animations || {};
+  baseViewport = idleViewport;
+  animationViewports = Object.fromEntries(Object.entries(sampledBounds?.animations || {})
+    .map(([animationName, bounds]) => [animationName, {
+      x: bounds.offset.x,
+      y: bounds.offset.y,
+      width: bounds.size.x,
+      height: bounds.size.y
+    }])
+    .filter(([, viewport]) => isValidViewport(viewport)));
   if (scene.window.adaptiveToContent && idleBounds.size.x > 0 && idleBounds.size.y > 0) {
     const idleWindowSize = calculateAdaptiveWindowSize(idleBounds);
     adaptiveWindowSize = {
@@ -1174,12 +1211,15 @@ async function initializePlayer() {
 
   spinePlayerHost.setVisible(true);
   try {
+    const skeletonSource = scene.assets.skeleton.toLowerCase().endsWith(".json")
+      ? { jsonUrl: scene.assets.skeleton }
+      : { skelUrl: scene.assets.skeleton };
     const loadedPlayer = await spinePlayerHost.load({
-      skelUrl: scene.assets.skeleton,
+      ...skeletonSource,
       atlasUrl: scene.assets.atlas,
       alpha: true,
       backgroundColor: "00000000",
-      premultipliedAlpha: true,
+      premultipliedAlpha: scene.assets.premultipliedAlpha !== false,
       showControls: false,
       showLoading: false,
       preserveDrawingBuffer: false

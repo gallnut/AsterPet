@@ -111,7 +111,7 @@ class SceneRepository {
   async install(archivePath) {
     const installed = await installPackage(archivePath, this.asterPetHome);
     this.refresh();
-    this.log(`Imported package ${installed.manifest.id} ${installed.manifest.version}`);
+    this.log(`Imported package ${installed.manifest.id} ${installed.manifest.version}; added=${installed.addedScenes.length}; duplicates=${installed.skippedScenes.length}`);
     return installed;
   }
 
