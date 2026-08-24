@@ -51,18 +51,21 @@ packager({
     }
     if (platform === "linux") {
       const bridgeName = "wayland-drag-bridge.node";
+      const bridgeLibraryName = "wayland-interpose.so";
       const fontconfigDirectory = path.join(output, "fontconfig");
       const bridgePath = path.join(output, bridgeName);
+      const bridgeLibraryPath = path.join(output, bridgeLibraryName);
       const binaryPath = path.join(output, "AsterPet.bin");
       const launcherPath = path.join(output, "AsterPet");
       fs.copyFileSync(path.join(projectRoot, "build", "native", bridgeName), bridgePath);
+      fs.copyFileSync(path.join(projectRoot, "build", "native", bridgeLibraryName), bridgeLibraryPath);
       fs.mkdirSync(fontconfigDirectory, { recursive: true });
       fs.copyFileSync(path.join(projectRoot, "resources", "fontconfig", "fonts.conf"), path.join(fontconfigDirectory, "fonts.conf"));
       fs.renameSync(launcherPath, binaryPath);
       fs.writeFileSync(launcherPath, `#!/bin/sh
 APP_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 export ASTERPET_WAYLAND_BRIDGE="$APP_DIR/${bridgeName}"
-export LD_PRELOAD="$ASTERPET_WAYLAND_BRIDGE\${LD_PRELOAD:+:$LD_PRELOAD}"
+export LD_PRELOAD="$APP_DIR/${bridgeLibraryName}\${LD_PRELOAD:+:$LD_PRELOAD}"
 FONTCONFIG_CACHE_HOME="\${XDG_CACHE_HOME:-$HOME/.cache}/asterpet"
 FONTCONFIG_ROOT="$FONTCONFIG_CACHE_HOME/fontconfig-root"
 mkdir -p "$FONTCONFIG_ROOT/etc/fonts" "$FONTCONFIG_ROOT/usr/share" "$FONTCONFIG_ROOT/usr/local/share" "$FONTCONFIG_ROOT/var/cache"

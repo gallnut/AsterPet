@@ -102,7 +102,7 @@ app.on("before-quit", event => {
   externalAi.stop();
   controlServer.stop();
   waylandBridge?.shutdown?.();
-  windows.shutdown().finally(() => app.exit(0));
+  windows.shutdown().finally(() => app.quit());
 });
 
 app.on("window-all-closed", () => {

@@ -4,7 +4,8 @@ const { prepareFontconfigRuntime } = require("./fontconfig-runtime");
 
 const root = path.join(__dirname, "..");
 const electronPath = require("electron");
-const bridgePath = path.join(root, "build", "native", "wayland-drag-bridge.node");
+const bridgeAddonPath = path.join(root, "build", "native", "wayland-drag-bridge.node");
+const bridgeLibraryPath = path.join(root, "build", "native", "wayland-interpose.so");
 const environment = { ...process.env };
 
 if (process.platform === "linux") {
@@ -13,25 +14,19 @@ if (process.platform === "linux") {
       ? "wayland"
       : "x11";
   }
-  environment.ASTERPET_WAYLAND_BRIDGE = bridgePath;
+  environment.ASTERPET_WAYLAND_BRIDGE = bridgeAddonPath;
   Object.assign(environment, prepareFontconfigRuntime({
     root: path.join(root, "build", "runtime", "fontconfig-root"),
     configSource: path.join(root, "resources", "fontconfig", "fonts.conf")
   }));
   environment.LD_PRELOAD = environment.LD_PRELOAD
-    ? `${bridgePath}:${environment.LD_PRELOAD}`
-    : bridgePath;
+    ? `${bridgeLibraryPath}:${environment.LD_PRELOAD}`
+    : bridgeLibraryPath;
 }
 
 const electronFlags = environment.ELECTRON_REMOTE_DEBUGGING_PORT
   ? [`--remote-debugging-port=${environment.ELECTRON_REMOTE_DEBUGGING_PORT}`]
   : [];
-if (process.platform === "linux"
-    && environment.XDG_SESSION_TYPE === "wayland"
-    && environment.WAYLAND_DISPLAY
-    && environment.ELECTRON_OZONE_PLATFORM_HINT !== "x11") {
-  electronFlags.push("--in-process-gpu");
-}
 const child = spawn(electronPath, [...electronFlags, root, ...process.argv.slice(2)], {
   stdio: "inherit",
   env: environment

@@ -497,7 +497,6 @@ class WindowManager {
     this.statusWindow = undefined;
     this.petWindow = undefined;
     this.log("Closed application windows after renderer cleanup");
-    await new Promise(resolve => setTimeout(resolve, 500));
   }
 
   setVisualBounds(bounds) {
