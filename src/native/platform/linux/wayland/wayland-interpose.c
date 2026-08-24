@@ -19,9 +19,25 @@
 sendmsg_fn real_sendmsg;
 static recvmsg_fn real_recvmsg;
 static close_fn real_close;
+struct wl_proxy;
+struct wl_event_queue;
+typedef void (*wl_proxy_set_queue_fn)(struct wl_proxy *, struct wl_event_queue *);
+typedef void (*wl_proxy_destroy_fn)(struct wl_proxy *);
+typedef const char *(*wl_proxy_get_class_fn)(struct wl_proxy *);
+typedef void (*wl_event_queue_destroy_fn)(struct wl_event_queue *);
+static wl_proxy_set_queue_fn real_wl_proxy_set_queue;
+static wl_proxy_destroy_fn real_wl_proxy_destroy;
+static wl_proxy_get_class_fn real_wl_proxy_get_class;
+static wl_event_queue_destroy_fn real_wl_event_queue_destroy;
 static ConnectionState connections[MAX_CONNECTIONS];
 static pthread_mutex_t state_mutex = PTHREAD_MUTEX_INITIALIZER;
+static pthread_mutex_t proxy_mutex = PTHREAD_MUTEX_INITIALIZER;
 static bool bridge_shutting_down;
+typedef struct {
+  struct wl_proxy *proxy;
+  struct wl_event_queue *queue;
+} ShmProxyState;
+static ShmProxyState shm_proxies[256];
 uint32_t captured_connection_count;
 uint32_t captured_pointer_count;
 uint32_t captured_toplevel_count;
@@ -43,6 +59,57 @@ void wayland_resolve_symbols(void) {
   if (!real_sendmsg) real_sendmsg = (sendmsg_fn)dlvsym(RTLD_NEXT, "sendmsg", "GLIBC_2.2.5");
   if (!real_recvmsg) real_recvmsg = (recvmsg_fn)dlvsym(RTLD_NEXT, "recvmsg", "GLIBC_2.2.5");
   if (!real_close) real_close = (close_fn)dlvsym(RTLD_NEXT, "close", "GLIBC_2.2.5");
+  if (!real_wl_proxy_set_queue) real_wl_proxy_set_queue = (wl_proxy_set_queue_fn)dlsym(RTLD_NEXT, "wl_proxy_set_queue");
+  if (!real_wl_proxy_destroy) real_wl_proxy_destroy = (wl_proxy_destroy_fn)dlsym(RTLD_NEXT, "wl_proxy_destroy");
+  if (!real_wl_proxy_get_class) real_wl_proxy_get_class = (wl_proxy_get_class_fn)dlsym(RTLD_NEXT, "wl_proxy_get_class");
+  if (!real_wl_event_queue_destroy) real_wl_event_queue_destroy = (wl_event_queue_destroy_fn)dlsym(RTLD_NEXT, "wl_event_queue_destroy");
+}
+
+void wl_proxy_set_queue(struct wl_proxy *proxy, struct wl_event_queue *queue) {
+  wayland_resolve_symbols();
+  if (real_wl_proxy_set_queue) real_wl_proxy_set_queue(proxy, queue);
+  if (!proxy || !queue || !real_wl_proxy_get_class) return;
+  const char *class_name = real_wl_proxy_get_class(proxy);
+  if (!class_name || strcmp(class_name, "wl_shm_pool") != 0) return;
+  pthread_mutex_lock(&proxy_mutex);
+  for (size_t index = 0; index < 256; index++) {
+    if (shm_proxies[index].proxy && shm_proxies[index].proxy != proxy) continue;
+    shm_proxies[index].proxy = proxy;
+    shm_proxies[index].queue = queue;
+    break;
+  }
+  pthread_mutex_unlock(&proxy_mutex);
+}
+
+void wl_proxy_destroy(struct wl_proxy *proxy) {
+  wayland_resolve_symbols();
+  pthread_mutex_lock(&proxy_mutex);
+  for (size_t index = 0; index < 256; index++) {
+    if (shm_proxies[index].proxy != proxy) continue;
+    shm_proxies[index].proxy = NULL;
+    shm_proxies[index].queue = NULL;
+    break;
+  }
+  pthread_mutex_unlock(&proxy_mutex);
+  if (real_wl_proxy_destroy) real_wl_proxy_destroy(proxy);
+}
+
+void wl_event_queue_destroy(struct wl_event_queue *queue) {
+  wayland_resolve_symbols();
+  struct wl_proxy *pending[256];
+  size_t pending_count = 0;
+  pthread_mutex_lock(&proxy_mutex);
+  for (size_t index = 0; index < 256; index++) {
+    if (!shm_proxies[index].proxy || shm_proxies[index].queue != queue) continue;
+    pending[pending_count++] = shm_proxies[index].proxy;
+    shm_proxies[index].proxy = NULL;
+    shm_proxies[index].queue = NULL;
+  }
+  pthread_mutex_unlock(&proxy_mutex);
+  for (size_t index = 0; index < pending_count; index++) {
+    if (real_wl_proxy_destroy) real_wl_proxy_destroy(pending[index]);
+  }
+  if (real_wl_event_queue_destroy) real_wl_event_queue_destroy(queue);
 }
 
 static ConnectionState *find_connection(int fd) {
