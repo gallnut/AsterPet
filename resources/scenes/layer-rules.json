@@ -15,6 +15,7 @@
     "^(Earth|Earth_|Jupiter|Meteorite_|Moon$|Planet_|Saturn|Universe|Uni_BG)"
   ],
   "characterPatterns": [
+    "^standing_",
     "^(?:\\d+[_-]?)?(?:[A-Z]+_)?(arm|body|chest|ear|eye|eyeball|eyeballs|eyebase|eyelid|eyelash|eyebrow|brow|lash|face|finger|hand|foot|toe|thigh|hair|head|headacc|hip|leg|mouth|tongue|neck|nose|ponytail|pony_hair|shadow_hair|shoulder|side_hair|light)(?:\\d|_|-|\\s|$)",
     "^(F_|B_|L_|R_|new_|bang|han|eyew|pupil|tail|palm|wing|hairF|Calf|Upperarm|forearm|eyeild|Blush)",
     "^(?:back|front|side)[ _-]?(?:hair|tail)(?:\\d|_|-|\\s|$)",
@@ -25,7 +26,7 @@
   ],
   "propGroups": [
     {
-      "pattern": "^(window|curtain|ceiling|railing|pillar|stand|stage|pool|tent|frame|stairs|door|roof|ground|floor|wall|room|scene|range|grid)",
+      "pattern": "^(window|curtain|ceiling|railing|pillar|stand(?:$|[_\\s-])|stage|pool|tent|frame|stairs|door|roof|ground|floor|wall|room|scene|range|grid)",
       "label": "背景与场景",
       "role": "background",
       "defaultVisible": false

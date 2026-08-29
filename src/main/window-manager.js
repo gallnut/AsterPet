@@ -24,6 +24,7 @@ class WindowManager {
     this.petSurfaceHeight = 720;
     this.embeddedStatusVisible = false;
     this.embeddedStatusBaseWidth = 380;
+    this.macOSUtilityReserveWidth = 320;
     this.toolbarVisible = false;
     this.toolbarHeight = 122;
     this.currentContext = { state: "idle" };
@@ -36,6 +37,12 @@ class WindowManager {
     this.shutdownWaiter = undefined;
   }
 
+  keepVisibleAboveMacOSFullScreen(window) {
+    if (process.platform !== "darwin") return;
+    window.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+    window.setFullScreenable(false);
+  }
+
   create() {
     this.log("Creating window");
     this.petWindow = new this.BrowserWindow({
@@ -45,6 +52,7 @@ class WindowManager {
       backgroundColor: "#00000000",
       frame: false,
       resizable: false,
+      ...(process.platform === "darwin" ? { type: "panel", enableLargerThanScreen: true } : {}),
       fullscreenable: false,
       alwaysOnTop: true,
       skipTaskbar: true,
@@ -53,6 +61,7 @@ class WindowManager {
     });
     this.petWindow.setBackgroundColor("#00000000");
     this.petWindow.setAlwaysOnTop(true, "screen-saver");
+    this.keepVisibleAboveMacOSFullScreen(this.petWindow);
 
     if (!this.nativeWayland) this.createStatusWindows();
     this.bindPetWindowEvents();
@@ -68,6 +77,7 @@ class WindowManager {
       backgroundColor: "#00000000",
       frame: false,
       resizable: false,
+      ...(process.platform === "darwin" ? { type: "panel" } : {}),
       fullscreenable: false,
       alwaysOnTop: true,
       skipTaskbar: true,
@@ -77,6 +87,7 @@ class WindowManager {
     });
     this.statusWindow.setBackgroundColor("#00000000");
     this.statusWindow.setAlwaysOnTop(true, "screen-saver");
+    this.keepVisibleAboveMacOSFullScreen(this.statusWindow);
     this.statusWindow.loadFile(path.join(this.projectRoot, "src", "renderer", "status", "index.html"));
     this.statusWindow.webContents.on("did-finish-load", () => {
       this.publishContext(this.currentContext);
@@ -92,6 +103,7 @@ class WindowManager {
       backgroundColor: "#00000000",
       frame: false,
       resizable: false,
+      ...(process.platform === "darwin" ? { type: "panel" } : {}),
       alwaysOnTop: true,
       skipTaskbar: true,
       hasShadow: false,
@@ -100,6 +112,7 @@ class WindowManager {
     });
     this.popoverWindow.setBackgroundColor("#00000000");
     this.popoverWindow.setAlwaysOnTop(true, "screen-saver");
+    this.keepVisibleAboveMacOSFullScreen(this.popoverWindow);
     this.popoverWindow.loadFile(path.join(this.projectRoot, "src", "renderer", "popover", "index.html"));
     this.popoverWindow.on("blur", () => this.popoverWindow?.hide());
   }
@@ -353,7 +366,7 @@ class WindowManager {
     if (current.width !== this.petSurfaceWidth || current.height !== this.petSurfaceHeight) {
       this.petWindow.setBounds({
         x: current.x,
-        y: current.y + current.height - this.petSurfaceHeight,
+        y: current.y,
         width: this.petSurfaceWidth,
         height: this.petSurfaceHeight
       }, false);
@@ -429,15 +442,33 @@ class WindowManager {
       return;
     }
     const current = this.petWindow.getBounds();
-    const desiredX = Math.round(current.x + (current.width - this.petContentWidth) / 2);
-    const desiredY = current.y + current.height - this.petContentHeight;
+    const reserveWidth = process.platform === "darwin" && this.toolbarVisible ? this.macOSUtilityReserveWidth : 0;
+    const desiredWidth = this.petContentWidth + reserveWidth;
+    const desiredHeight = this.petContentHeight + (process.platform === "darwin" && this.toolbarVisible ? this.toolbarHeight : 0);
+    const desiredX = Math.round(current.x + (current.width - reserveWidth - this.petContentWidth) / 2);
+    const desiredY = current.y + current.height - desiredHeight;
     this.petWindow.setBounds({
       x: desiredX,
       y: desiredY,
-      width: this.petContentWidth,
-      height: this.petContentHeight
+      width: desiredWidth,
+      height: desiredHeight
     }, false);
     this.statusWindow?.webContents.send("pet:status-scale", this.petUiScale);
+    this.positionStatusWindow();
+  }
+
+  syncMacOSToolsWindow() {
+    if (process.platform !== "darwin" || !this.petWindow || this.petWindow.isDestroyed()) return;
+    const current = this.petWindow.getBounds();
+    const width = this.petContentWidth + (this.toolbarVisible ? this.macOSUtilityReserveWidth : 0);
+    const height = this.petContentHeight + (this.toolbarVisible ? this.toolbarHeight : 0);
+    if (current.width === width && current.height === height) return;
+    this.petWindow.setBounds({
+      x: current.x + current.width - width,
+      y: current.y + current.height - height,
+      width,
+      height
+    }, false);
     this.positionStatusWindow();
   }
 
@@ -446,6 +477,7 @@ class WindowManager {
     if (this.toolbarVisible === next) return;
     this.toolbarVisible = next;
     this.syncEmbeddedStatusWindow();
+    this.syncMacOSToolsWindow();
   }
 
   completeShutdown() {

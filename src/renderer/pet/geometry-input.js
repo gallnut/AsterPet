@@ -1,11 +1,12 @@
 (function registerGeometryInputController() {
   class GeometryInputController {
-    constructor({ desktopPet, spineRuntime, getScene, getPlayer, getSequenceImage, embeddedStatus, controlElements, statusElement, log }) {
+    constructor({ desktopPet, spineRuntime, getScene, getPlayer, getSequenceImage, getMirrored, embeddedStatus, controlElements, statusElement, log }) {
       this.desktopPet = desktopPet;
       this.spine = spineRuntime;
       this.getScene = getScene;
       this.getPlayer = getPlayer;
       this.getSequenceImage = getSequenceImage;
+      this.getMirrored = getMirrored || (() => false);
       this.embeddedStatus = embeddedStatus;
       this.controlElements = controlElements;
       this.statusElement = statusElement;
@@ -202,7 +203,8 @@
         if (this.projectedBuffer.length < projectedLength) this.projectedBuffer = new Float32Array(projectedLength);
         for (let source = 0, target = 0; source < vertices.length; source += stride, target += 2) {
           camera.worldToScreen(this.screenPoint.set(vertices[source], vertices[source + 1], 0), renderViewport.width, renderViewport.height);
-          this.projectedBuffer[target] = canvasBounds.left + renderViewport.x + this.screenPoint.x;
+          const localX = renderViewport.x + this.screenPoint.x;
+          this.projectedBuffer[target] = canvasBounds.left + (this.getMirrored ? canvasBounds.width - localX : localX);
           this.projectedBuffer[target + 1] = canvasBounds.top + renderViewport.y + renderViewport.height - this.screenPoint.y;
         }
         for (let index = 0; index + 2 < indices.length; index += 3) {
@@ -322,6 +324,11 @@
       this.visualBoundsPending = false;
       this.updatePending = false;
       this.reportInputShape();
+    }
+
+    mirrorChanged() {
+      this.lastInputShapeSignature = "";
+      this.requestVisualBoundsUpdate();
     }
 
     isOpaquePoint(clientX, clientY) {

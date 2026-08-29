@@ -10,6 +10,7 @@ if (process.platform === "linux" && process.env.ASTERPET_WAYLAND_BRIDGE) {
 }
 
 contextBridge.exposeInMainWorld("desktopPet", {
+  platform: process.platform,
   nativeWayland: process.platform === "linux"
     && (process.env.ELECTRON_OZONE_PLATFORM_HINT || "").toLowerCase() !== "x11"
     && ((process.env.ELECTRON_OZONE_PLATFORM_HINT || "").toLowerCase() === "wayland"

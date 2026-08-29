@@ -36,6 +36,7 @@ class SettingsStore {
     const settings = this.read();
     return {
       selectedScene: typeof settings.ui?.selectedScene === "string" ? settings.ui.selectedScene : undefined,
+      mirrored: settings.ui?.mirrored === true,
       propVisibility: settings.ui?.propVisibility && typeof settings.ui.propVisibility === "object"
         ? settings.ui.propVisibility
         : {},
@@ -58,6 +59,7 @@ class SettingsStore {
     const next = {
       ...current,
       ...values,
+      mirrored: values.mirrored === undefined ? current.mirrored : Boolean(values.mirrored),
       propVisibility: values.propVisibility === undefined
         ? current.propVisibility
         : values.propVisibility,

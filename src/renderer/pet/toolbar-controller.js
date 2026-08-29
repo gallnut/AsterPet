@@ -1,6 +1,6 @@
 (function registerToolbarController() {
   class ToolbarController {
-    constructor({ desktopPet, elements, getScene, getActiveSceneId, onPackagesChanged, setToolsVisible, setMousePassthrough, playAnimation, changeScale, getAnimationNames, selectAppearance }) {
+    constructor({ desktopPet, elements, getScene, getActiveSceneId, onPackagesChanged, setToolsVisible, setMousePassthrough, playAnimation, changeScale, toggleMirrored, getAnimationNames, selectAppearance }) {
       this.desktopPet = desktopPet;
       this.elements = elements;
       this.getScene = getScene;
@@ -10,6 +10,7 @@
       this.setMousePassthrough = setMousePassthrough;
       this.playAnimation = playAnimation;
       this.changeScale = changeScale;
+      this.toggleMirrored = toggleMirrored;
       this.getAnimationNames = getAnimationNames;
       this.selectAppearance = selectAppearance;
       this.packages = [];
@@ -263,6 +264,7 @@
       });
       elements.zoomOut.addEventListener("click", () => this.changeScale(-0.05));
       elements.zoomIn.addEventListener("click", () => this.changeScale(0.05));
+      elements.mirror.addEventListener("click", () => this.toggleMirrored());
       elements.minimize.addEventListener("click", () => this.desktopPet.minimize());
       elements.close.addEventListener("click", () => this.desktopPet.close());
     }

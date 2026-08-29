@@ -6,10 +6,12 @@
   const DEFAULT_FACE_TALK = /^_?face\d+[_-]?talk$/i;
 
   class AmbientBehaviorDirector {
-    constructor({ getPlayer, getScene, getAnimationNames, canPlay, onAnimation, log }) {
+    constructor({ getPlayer, getScene, getAnimationNames, isFullPoseAnimation, getOverlayAnimation, canPlay, onAnimation, log }) {
       this.getPlayer = getPlayer;
       this.getScene = getScene;
       this.listAnimationNames = getAnimationNames;
+      this.isFullPoseAnimation = isFullPoseAnimation || (() => false);
+      this.getOverlayAnimation = getOverlayAnimation || (animationName => this.getPlayer()?.skeleton?.data?.findAnimation(animationName));
       this.canPlay = canPlay;
       this.onAnimation = onAnimation;
       this.log = log;
@@ -145,9 +147,11 @@
         .map(entry => ({
           animation: entry.animation,
           weight: Math.max(0.01, Number(entry.weight) || 1),
-          track: Math.max(0, Math.round(Number(entry.track) || 1)),
-          mode: entry.mode === "base" ? "base" : "overlay",
-          role: entry.role || (entry.mode === "base" ? "body" : "expression"),
+          track: this.isFullPoseAnimation(entry.animation)
+            ? 0
+            : Math.max(0, Math.round(Number(entry.track) || 1)),
+          mode: this.isFullPoseAnimation(entry.animation) || entry.mode === "base" ? "base" : "overlay",
+          role: entry.role || (this.isFullPoseAnimation(entry.animation) || entry.mode === "base" ? "body" : "expression"),
           holdMs: Number.isFinite(Number(entry.holdMs))
             ? Math.max(0, Number(entry.holdMs))
             : this.inferredHoldMs(entry.animation)
@@ -220,7 +224,10 @@
         player.animationState.addAnimation(0, scene.actions.idle.animation, true, visibleDurationMs / 1000);
       } else {
         this.interruptOverlay();
-        const entry = player.animationState.setAnimation(track, behavior.animation, false);
+        const animation = this.getOverlayAnimation(behavior.animation);
+        const entry = animation && player.animationState.setAnimationWith
+          ? player.animationState.setAnimationWith(track, animation, false)
+          : player.animationState.setAnimation(track, behavior.animation, false);
         this.overlayCleanupGeneration += 1;
         entry.mixDuration = this.settings.mixDuration;
         this.activeOverlayTrack = track;

@@ -17,6 +17,8 @@
     "migrate:layers": "node scripts/migrate-layer-metadata.mjs",
     "validate:layers": "node scripts/migrate-layer-metadata.mjs --check",
     "pack": "node scripts/pack.js",
+    "pack:mac": "node scripts/pack.js darwin",
+    "dist:mac": "node scripts/build-mac.js",
     "pack:linux": "node scripts/build-wayland-bridge.js && node scripts/pack.js linux"
   },
   "engines": {

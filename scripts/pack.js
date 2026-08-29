@@ -1,14 +1,40 @@
 const fs = require("fs");
+const os = require("os");
 const path = require("path");
 const { packager } = require("@electron/packager");
 
 const platform = process.argv[2] || process.platform;
+const arch = process.env.ASTERPET_ARCH || process.arch;
+const electronVersion = require("electron/package.json").version;
+
+function findCachedElectronZipDirectory() {
+  if (process.env.ASTERPET_ELECTRON_ZIP_DIR) return process.env.ASTERPET_ELECTRON_ZIP_DIR;
+  const cacheRoot = path.join(process.env.XDG_CACHE_HOME || path.join(os.homedir(), ".cache"), "electron");
+  const archiveName = `electron-v${electronVersion}-${platform}-${arch}.zip`;
+  try {
+    for (const entry of fs.readdirSync(cacheRoot, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      const directory = path.join(cacheRoot, entry.name);
+      if (fs.existsSync(path.join(directory, archiveName))) return directory;
+    }
+  } catch (error) {
+    if (error.code !== "ENOENT") throw error;
+  }
+  return undefined;
+}
+
+const electronZipDir = findCachedElectronZipDirectory();
 
 packager({
   dir: path.join(__dirname, ".."),
   name: "AsterPet",
   platform,
-  arch: "x64",
+  arch,
+  ...(electronZipDir ? { electronZipDir } : {}),
+  ...(platform === "darwin" ? {
+    appBundleId: "com.asterpet.desktop",
+    appCategoryType: "public.app-category.entertainment"
+  } : {}),
   out: path.join(__dirname, "..", "dist"),
   tmpdir: false,
   overwrite: true,
@@ -32,6 +58,7 @@ packager({
     /^\/content(?:\/|$)/,
     /^\/build(?:\/|$)/,
     /^\/dist(?:\/|$)/,
+    /^\/packaging(?:\/|$)/,
     /^\/resources\/scenes\/(?!layer-rules\.json$)/,
     /^\/\.cg-test-/,
     /^\/\.test-user-data(?:\/|$)/,

@@ -1,92 +1,99 @@
 <!doctype html>
 <html lang="zh-CN">
-  <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: asterpet:; media-src 'self' asterpet:; connect-src 'self' asterpet:; worker-src 'self' blob:">
-    <title>AsterPet</title>
-    <link rel="stylesheet" href="../../../node_modules/@esotericsoftware/spine-player/dist/spine-player.css">
-    <link rel="stylesheet" href="styles.css">
-  </head>
-  <body>
-    <iframe id="embedded-status" src="../status/index.html" title="对话与状态" hidden></iframe>
-    <div id="player"></div>
-    <div id="interaction-layer" aria-label="人物交互区域"></div>
-    <div id="status">正在加载互动场景…</div>
-    <div id="toolbar">
-      <button id="previous" title="上一个动画">◀</button>
-      <select id="appearances" title="选择外观"></select>
-      <button id="scene-toggle" title="切换场景">场景</button>
-      <button id="import-package" title="导入 .asterpet 人物包">导入</button>
-      <button id="packages-toggle" title="管理人物包">资源</button>
-      <button id="ai-settings" title="设置外部 AI 与对话皮肤">AI</button>
-      <button id="window-menu" title="打开 GNOME 窗口菜单">窗口</button>
-      <button id="chat-toggle" title="开始与 LLM 对话">对话</button>
-      <button id="props-toggle" title="逐项选择图层与组件">图层</button>
-      <select id="animations" title="选择动画"></select>
-      <button id="next" title="下一个动画">▶</button>
-      <button id="zoom-out" title="缩小人物">−</button>
-      <span id="zoom-label">75%</span>
-      <button id="zoom-in" title="放大人物">＋</button>
-      <button id="minimize" title="最小化">—</button>
-      <button id="close" title="退出">×</button>
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="Content-Security-Policy"
+    content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: asterpet:; media-src 'self' asterpet:; connect-src 'self' asterpet:; worker-src 'self' blob:">
+  <title>AsterPet</title>
+  <link rel="stylesheet" href="../../../node_modules/@esotericsoftware/spine-player/dist/spine-player.css">
+  <link rel="stylesheet" href="styles.css">
+</head>
+
+<body>
+  <iframe id="embedded-status" src="../status/index.html" title="对话与状态" hidden></iframe>
+  <div id="player"></div>
+  <div id="interaction-layer" aria-label="人物交互区域"></div>
+  <div id="status">正在加载互动场景…</div>
+  <div id="toolbar">
+    <button id="previous" title="上一个动画">◀</button>
+    <select id="appearances" title="选择外观"></select>
+    <button id="scene-toggle" title="切换场景">场景</button>
+    <button id="import-package" title="导入 .asterpet 人物包">导入</button>
+    <button id="packages-toggle" title="管理人物包">资源</button>
+    <button id="ai-settings" title="设置外部 AI 与对话皮肤">AI</button>
+    <button id="mirror" tilte="水平镜像" aria-pressed="false">镜像</button>
+    <button id="window-menu" title="打开 GNOME 窗口菜单">窗口</button>
+    <button id="chat-toggle" title="开始与 LLM 对话">对话</button>
+    <button id="props-toggle" title="逐项选择图层与组件">图层</button>
+    <select id="animations" title="选择动画"></select>
+    <button id="next" title="下一个动画">▶</button>
+    <button id="zoom-out" title="缩小人物">−</button>
+    <span id="zoom-label">75%</span>
+    <button id="zoom-in" title="放大人物">＋</button>
+    <button id="minimize" title="最小化">—</button>
+    <button id="close" title="退出">×</button>
+  </div>
+  <div id="props-panel" hidden>
+    <div class="panel-title">图层与组件</div>
+    <div class="layer-search">
+      <input id="layer-search-input" type="search" autocomplete="off" spellcheck="false" placeholder="搜索分组或 slot…"
+        aria-label="搜索图层与组件">
+      <span id="layer-search-count" aria-live="polite"></span>
     </div>
-    <div id="props-panel" hidden>
-      <div class="panel-title">图层与组件</div>
-      <div class="layer-search">
-        <input id="layer-search-input" type="search" autocomplete="off" spellcheck="false" placeholder="搜索分组或 slot…" aria-label="搜索图层与组件">
-        <span id="layer-search-count" aria-live="polite"></span>
-      </div>
-      <div class="layer-search-actions">
-        <button id="layer-search-enable" type="button" disabled>启用结果</button>
-        <button id="layer-search-disable" type="button" disabled>屏蔽结果</button>
-      </div>
-      <div id="props-list"></div>
-      <div id="layer-search-empty" class="layer-search-empty" hidden>没有匹配的图层</div>
+    <div class="layer-search-actions">
+      <button id="layer-search-enable" type="button" disabled>启用结果</button>
+      <button id="layer-search-disable" type="button" disabled>屏蔽结果</button>
     </div>
-    <div id="scene-panel" hidden>
-      <div class="scene-heading">
-        <div class="panel-title">选择场景</div>
-        <select id="scene-filter" title="筛选场景">
-          <option value="all">全部场景</option>
-          <option value="favorites">我的收藏</option>
-        </select>
-      </div>
-      <div id="scene-list"></div>
-      <div id="scene-message" class="package-message" hidden></div>
+    <div id="props-list"></div>
+    <div id="layer-search-empty" class="layer-search-empty" hidden>没有匹配的图层</div>
+  </div>
+  <div id="scene-panel" hidden>
+    <div class="scene-heading">
+      <div class="panel-title">选择场景</div>
+      <select id="scene-filter" title="筛选场景">
+        <option value="all">全部场景</option>
+        <option value="favorites">我的收藏</option>
+      </select>
     </div>
-    <div id="packages-panel" hidden>
-      <div class="panel-title">人物资源包</div>
-      <div class="package-actions">
-        <button id="package-import" class="wide-action">批量导入</button>
-        <button id="package-delete" class="wide-action danger-action" disabled>删除选中</button>
-      </div>
-      <label class="package-select-all"><input id="package-select-all" type="checkbox"> 全选</label>
-      <div id="packages-list"></div>
-      <div id="packages-message" class="package-message"></div>
+    <div id="scene-list"></div>
+    <div id="scene-message" class="package-message" hidden></div>
+  </div>
+  <div id="packages-panel" hidden>
+    <div class="panel-title">人物资源包</div>
+    <div class="package-actions">
+      <button id="package-import" class="wide-action">批量导入</button>
+      <button id="package-delete" class="wide-action danger-action" disabled>删除选中</button>
     </div>
-    <div id="ai-panel" hidden>
-      <div class="panel-title">外部 AI</div>
-      <label class="settings-field"><span>Driver</span><select id="ai-driver"></select></label>
-      <label class="settings-field"><span>服务地址</span><input id="ai-endpoint" type="url" inputmode="url" autocomplete="off" spellcheck="false" placeholder="http://127.0.0.1:3080"></label>
-      <div class="panel-title theme-title">对话皮肤</div>
-      <label class="settings-field"><span>当前皮肤</span><select id="dialog-theme"></select></label>
-      <button id="import-dialog-theme" class="wide-action">导入 .asterpet-theme</button>
-      <div id="ai-message">保存后会立即重连外部 AI。</div>
-      <div class="settings-actions">
-        <button id="ai-cancel">取消</button>
-        <button id="ai-save">保存</button>
-      </div>
+    <label class="package-select-all"><input id="package-select-all" type="checkbox"> 全选</label>
+    <div id="packages-list"></div>
+    <div id="packages-message" class="package-message"></div>
+  </div>
+  <div id="ai-panel" hidden>
+    <div class="panel-title">外部 AI</div>
+    <label class="settings-field"><span>Driver</span><select id="ai-driver"></select></label>
+    <label class="settings-field"><span>服务地址</span><input id="ai-endpoint" type="url" inputmode="url" autocomplete="off"
+        spellcheck="false" placeholder="http://127.0.0.1:3080"></label>
+    <div class="panel-title theme-title">对话皮肤</div>
+    <label class="settings-field"><span>当前皮肤</span><select id="dialog-theme"></select></label>
+    <button id="import-dialog-theme" class="wide-action">导入 .asterpet-theme</button>
+    <div id="ai-message">保存后会立即重连外部 AI。</div>
+    <div class="settings-actions">
+      <button id="ai-cancel">取消</button>
+      <button id="ai-save">保存</button>
     </div>
-    <script src="../../../node_modules/@esotericsoftware/spine-player/dist/iife/spine-player.js"></script>
-    <script src="appearance-variants.js"></script>
-    <script src="spine-player-host.js"></script>
-    <script src="spine-render-scheduler.js"></script>
-    <script src="ambient-behavior-director.js"></script>
-    <script src="action-choreographer.js"></script>
-    <script src="geometry-input.js"></script>
-    <script src="pet-interaction.js"></script>
-    <script src="toolbar-controller.js"></script>
-    <script src="app.js"></script>
-  </body>
+  </div>
+  <script src="../../../node_modules/@esotericsoftware/spine-player/dist/iife/spine-player.js"></script>
+  <script src="appearance-variants.js"></script>
+  <script src="spine-player-host.js"></script>
+  <script src="spine-render-scheduler.js"></script>
+  <script src="ambient-behavior-director.js"></script>
+  <script src="action-choreographer.js"></script>
+  <script src="geometry-input.js"></script>
+  <script src="pet-interaction.js"></script>
+  <script src="toolbar-controller.js"></script>
+  <script src="app.js"></script>
+</body>
+
 </html>

@@ -22,12 +22,13 @@ const playerElement = document.getElementById("interaction-layer");
 const embeddedStatus = document.getElementById("embedded-status");
 
 document.body.classList.toggle("native-wayland", window.desktopPet.nativeWayland);
+document.body.classList.toggle("macos", window.desktopPet.platform === "darwin");
 
 let scene;
 let sceneManifest;
 let sceneCatalog;
 let globalLayerRules;
-let uiState = { propVisibility: {}, favoriteSceneIds: [], appearanceByScene: {}, variantSceneByFamily: {} };
+let uiState = { mirrored: false, propVisibility: {}, favoriteSceneIds: [], appearanceByScene: {}, variantSceneByFamily: {} };
 let uiStateInitialized = false;
 let player;
 let animationNames = [];
@@ -51,6 +52,7 @@ let enabledPropSlots = new Set();
 let currentAgentState = "idle";
 let currentAgentPayload = { state: "idle" };
 let toolsVisible = false;
+let mirrored = false;
 let disposing = false;
 let shutdownPrepared = false;
 let sceneGeneration = 0;
@@ -77,6 +79,8 @@ const behaviorDirector = new window.AsterPet.AmbientBehaviorDirector({
   getPlayer: () => player,
   getScene: () => scene,
   getAnimationNames: () => animationNames,
+  isFullPoseAnimation: animationName => isFullPoseAnimation(animationName),
+  getOverlayAnimation: animationName => getOverlayAnimation(animationName),
   canPlay: () => {
     if (disposing || currentAgentState !== "idle") return false;
     const currentAnimation = player?.animationState?.getCurrent(0)?.animation?.name;
@@ -89,6 +93,7 @@ const actionChoreographer = new window.AsterPet.ActionChoreographer({
   getPlayer: () => player,
   getScene: () => scene,
   getAnimationNames: () => animationNames,
+  getOverlayAnimation: animationName => getOverlayAnimation(animationName),
   onAnimation: animationName => petLog(`Action overlay: ${animationName}`),
   log: message => petLog(message)
 });
@@ -98,6 +103,7 @@ const geometryInput = new window.AsterPet.GeometryInputController({
   getScene: () => scene,
   getPlayer: () => player,
   getSequenceImage: () => sequenceImage,
+  getMirrored: () => mirrored,
   embeddedStatus,
   controlElements: () => [document.getElementById("toolbar"), propsPanel, scenePanel, packagesPanel, aiPanel],
   statusElement: status,
@@ -149,6 +155,7 @@ const toolbarController = new window.AsterPet.ToolbarController({
     next: document.getElementById("next"),
     zoomOut: document.getElementById("zoom-out"),
     zoomIn: document.getElementById("zoom-in"),
+    mirror: document.getElementById("mirror"),
     minimize: document.getElementById("minimize"),
     close: document.getElementById("close")
   },
@@ -165,6 +172,7 @@ const toolbarController = new window.AsterPet.ToolbarController({
   setMousePassthrough: enabled => setMousePassthrough(enabled),
   playAnimation: name => playAnimation(name),
   changeScale: delta => changeSceneScale(delta),
+  toggleMirrored: () => { void toggleMirrored(); },
   getAnimationNames: () => animationNames,
   selectAppearance: optionId => selectAppearance(optionId)
 });
@@ -284,6 +292,8 @@ async function disposeScene({ shutdown = false } = {}) {
   explicitInternalSlots = new Set();
   hiddenLayerSlotIndices = [];
   enabledPropSlots = new Set();
+  fullPoseAnimationCache.clear();
+  overlayAnimationCache.clear();
   baseViewport = undefined;
   animationViewports = {};
   activeViewportAnimation = undefined;
@@ -344,6 +354,47 @@ function resolveAnimationStagePrefix(targetSkeleton, animationName) {
   return stages[Number(stageMatch[1]) - 1];
 }
 
+const fullPoseAnimationCache = new Map();
+const overlayAnimationCache = new Map();
+
+function isFullPoseAnimation(animationName) {
+  if (!animationName || !player?.skeleton?.data) return false;
+  if (fullPoseAnimationCache.has(animationName)) return fullPoseAnimationCache.get(animationName);
+  const animation = player.skeleton.data.findAnimation(animationName);
+  if (!animation) return false;
+  const slotCount = player.skeleton.slots.length;
+  const attachmentSlots = new Set();
+  for (const timeline of animation.timelines || []) {
+    if (Array.isArray(timeline.attachmentNames) && Number.isInteger(timeline.slotIndex)) {
+      attachmentSlots.add(timeline.slotIndex);
+    }
+  }
+  const fullPose = attachmentSlots.size >= Math.max(24, Math.ceil(slotCount * 0.2));
+  fullPoseAnimationCache.set(animationName, fullPose);
+  return fullPose;
+}
+
+function getOverlayAnimation(animationName) {
+  if (!animationName || !player?.skeleton?.data) return undefined;
+  if (overlayAnimationCache.has(animationName)) return overlayAnimationCache.get(animationName);
+  const source = player.skeleton.data.findAnimation(animationName);
+  if (!source || !isFullPoseAnimation(animationName)) {
+    overlayAnimationCache.set(animationName, source);
+    return source;
+  }
+  const expressionSlot = /(?:face|eye|eyeboll|eyebrow|brow|lash|mouth|lip|blush|nose|tongue|pupil|emotion)/i;
+  const timelines = source.timelines.filter(timeline => {
+    if (!Array.isArray(timeline.attachmentNames) || !Number.isInteger(timeline.slotIndex)) return true;
+    const slotName = player.skeleton.slots[timeline.slotIndex]?.data?.name || "";
+    return expressionSlot.test(slotName);
+  });
+  const overlay = timelines.length === source.timelines.length
+    ? source
+    : new spine.Animation(`${source.name}__overlay`, timelines, source.duration);
+  overlayAnimationCache.set(animationName, overlay);
+  return overlay;
+}
+
 function getStoredPropVisibility(sceneId = scene?.id) {
   const value = uiState.propVisibility?.[sceneId];
   if (Array.isArray(value)) return { legacy: true, visibleSlots: new Set(value) };
@@ -357,6 +408,20 @@ async function persistUiState(values) {
   uiState = await window.desktopPet.updateUiState(values);
 }
 
+function applyMirroredState() {
+  const mirrorButton = document.getElementById("mirror");
+  document.body.classList.toggle("pet-mirrored", mirrored);
+  mirrorButton.setAttribute("aria-pressed", String(mirrored));
+  mirrorButton.title = mirrored ? "恢复原始方向" : "水平镜像";
+  geometryInput.mirrorChanged();
+}
+
+async function toggleMirrored() {
+  mirrored = !mirrored;
+  applyMirroredState();
+  await persistUiState({ mirrored });
+}
+
 async function initializeUiState() {
   if (uiStateInitialized) return;
   uiStateInitialized = true;
@@ -366,6 +431,8 @@ async function initializeUiState() {
   if (!Array.isArray(uiState.favoriteSceneIds)) uiState.favoriteSceneIds = [];
   if (!uiState.appearanceByScene || typeof uiState.appearanceByScene !== "object") uiState.appearanceByScene = {};
   if (!uiState.variantSceneByFamily || typeof uiState.variantSceneByFamily !== "object") uiState.variantSceneByFamily = {};
+  mirrored = uiState.mirrored === true;
+  applyMirroredState();
   let migrated = false;
   try {
     if (window.desktopPet.testMode) return;
@@ -587,8 +654,8 @@ function buildPropControls() {
           ? defaultChecked
           : persistedVisibility.visibleSlots.has(slot.data.name)
         : defaultVisible.has(slot.data.name)
-          || group.defaultVisible === true
-          || (group.defaultVisible === undefined && scene.layers?.defaultPropsVisible === true);
+        || group.defaultVisible === true
+        || (group.defaultVisible === undefined && scene.layers?.defaultPropsVisible === true);
       checkbox.addEventListener("change", () => {
         updateGroupState();
         applyLayerVisibility();

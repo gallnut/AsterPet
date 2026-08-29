@@ -16,10 +16,11 @@
   }
 
   class ActionChoreographer {
-    constructor({ getPlayer, getScene, getAnimationNames, onAnimation, log }) {
+    constructor({ getPlayer, getScene, getAnimationNames, getOverlayAnimation, onAnimation, log }) {
       this.getPlayer = getPlayer;
       this.getScene = getScene;
       this.listAnimationNames = getAnimationNames;
+      this.getOverlayAnimation = getOverlayAnimation || (animationName => this.getPlayer()?.skeleton?.data?.findAnimation(animationName));
       this.onAnimation = onAnimation;
       this.log = log;
       this.actionRecipes = new Map();
@@ -178,13 +179,16 @@
 
     playOverlay(entry, minimumVisibleMs = 0) {
       const player = this.getPlayer();
-      const animation = player?.skeleton?.data?.findAnimation?.(entry.animation);
-      if (!player?.animationState || !animation) return 0;
+      const sourceAnimation = player?.skeleton?.data?.findAnimation?.(entry.animation);
+      if (!player?.animationState || !sourceAnimation) return 0;
       clearTimeout(this.overlayTimer);
       if (this.activeTrack !== undefined && this.activeTrack !== entry.track && this.activeTrack !== 1) {
         player.animationState.setEmptyAnimation?.(this.activeTrack, entry.mixDuration);
       }
-      const trackEntry = player.animationState.setAnimation(entry.track, entry.animation, Boolean(entry.loop));
+      const overlayAnimation = this.getOverlayAnimation(entry.animation) || sourceAnimation;
+      const trackEntry = player.animationState.setAnimationWith
+        ? player.animationState.setAnimationWith(entry.track, overlayAnimation, Boolean(entry.loop))
+        : player.animationState.setAnimation(entry.track, entry.animation, Boolean(entry.loop));
       trackEntry.mixDuration = entry.mixDuration;
       this.activeTrack = entry.track;
       this.onAnimation(entry.animation);
@@ -192,7 +196,7 @@
       if (entry.loop) return Number.POSITIVE_INFINITY;
       const defaultHoldMs = Math.min(1800, Math.max(700, minimumVisibleMs));
       const holdMs = entry.holdMs ?? defaultHoldMs;
-      const visibleDurationMs = Math.max(animation.duration * 1000, holdMs);
+      const visibleDurationMs = Math.max(overlayAnimation.duration * 1000, holdMs);
       this.overlayTimer = setTimeout(() => {
         if (entry.track !== 1) player.animationState.setEmptyAnimation?.(entry.track, entry.mixDuration);
         this.overlayTimer = undefined;

@@ -39,6 +39,22 @@ pnpm start
 
 Windows 使用同一条 `pnpm start` 命令启动；仓库不依赖额外的启动脚本。
 
+## macOS
+
+生成可直接运行的 `.app`:
+
+```bash
+pnpm pack:mac
+```
+
+生成可拖入“应用程序”目录安装的 `.dmg`:
+
+```bash
+pnpm dist:mac
+```
+
+产物位于 `dist/`，并自动匹配当前 Mac 的 `arm64` 或 `x64` 架构。修改代码后退出正在运行的 AsterPet，再次执行相同命令即可覆盖构建。未使用 Apple Developer ID 的本机构建采用 ad-hoc 签名，适合在当前 Mac 上安装; 分发给其他用户前仍需要正式签名和 Apple 公证。
+
 ## Linux
 
 ```bash
