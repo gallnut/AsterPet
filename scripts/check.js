@@ -31,6 +31,7 @@ for (const relativePath of ["package.json", "resources/scenes/layer-rules.json",
 run(process.execPath, [path.join(projectRoot, "scripts", "check-animation-graph.mjs")]);
 run(process.execPath, [path.join(projectRoot, "scripts", "check-cinematic-player.mjs")]);
 run(process.execPath, [path.join(projectRoot, "scripts", "check-animation-tail-loop.mjs")]);
+run(process.execPath, [path.join(projectRoot, "scripts", "check-portrait-animations.mjs")]);
 run(process.execPath, [path.join(projectRoot, "scripts", "check-pet-interaction.mjs")]);
 run(process.execPath, [path.join(projectRoot, "scripts", "check-window-drag.js")]);
 run(process.execPath, [path.join(projectRoot, "scripts", "check-camera-view.mjs")]);

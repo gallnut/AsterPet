@@ -82,18 +82,28 @@ const renderScheduler = new window.AsterPet.SpineRenderScheduler({
   },
   onMetrics: metrics => petLog(`Spine rendering: ${metrics.fps.toFixed(1)} FPS, ${metrics.averageRenderTime.toFixed(2)} ms/frame`)
 });
+const portraitComposer = new window.AsterPet.PortraitAnimationComposer({
+  getPlayer: () => player,
+  getScene: () => scene,
+  spineRuntime: spine
+});
 const behaviorDirector = new window.AsterPet.AmbientBehaviorDirector({
   getPlayer: () => player,
   getScene: () => scene,
   getAnimationNames: () => animationNames,
   isFullPoseAnimation: animationName => isFullPoseAnimation(animationName),
+  isOverlayAnimation: animationName => portraitComposer.isOverlay(animationName),
   getOverlayAnimation: animationName => getOverlayAnimation(animationName),
   canPlay: () => {
     if (disposing || toolbarAnimationActive || currentAgentState !== "idle") return false;
     const currentAnimation = player?.animationState?.getCurrent(0)?.animation?.name;
     return currentAnimation === scene?.actions?.idle?.animation;
   },
-  onAnimation: animationName => petLog(`Ambient overlay: ${animationName}`),
+  onAnimation: animationName => {
+    portraitComposer.noteOverlay(animationName);
+    actionChoreographer.refreshAgentOverlay();
+    petLog(`Ambient overlay: ${animationName}`);
+  },
   log: message => petLog(message)
 });
 const actionChoreographer = new window.AsterPet.ActionChoreographer({
@@ -101,7 +111,11 @@ const actionChoreographer = new window.AsterPet.ActionChoreographer({
   getScene: () => scene,
   getAnimationNames: () => animationNames,
   getOverlayAnimation: animationName => getOverlayAnimation(animationName),
-  onAnimation: animationName => petLog(`Action overlay: ${animationName}`),
+  resolveAgentAnimation: animationName => portraitComposer.talkingAnimation(animationName),
+  onAnimation: animationName => {
+    portraitComposer.noteOverlay(animationName);
+    petLog(`Action overlay: ${animationName}`);
+  },
   log: message => petLog(message)
 });
 const animationGraphPlayer = new window.AsterPet.AnimationGraphPlayer({
@@ -299,6 +313,7 @@ async function disposeScene({ shutdown = false } = {}) {
   actionChoreographer.stop();
   behaviorDirector.stop();
   animationGraphPlayer.stop();
+  portraitComposer.stop();
   toolbarAnimationActive = false;
   updateInteractionModeButton();
   renderScheduler.stop();
@@ -382,6 +397,7 @@ const fullPoseAnimationCache = new Map();
 const overlayAnimationCache = new Map();
 
 function isFullPoseAnimation(animationName) {
+  if (portraitComposer.isOverlay(animationName)) return false;
   if (!animationName || !player?.skeleton?.data) return false;
   if (fullPoseAnimationCache.has(animationName)) return fullPoseAnimationCache.get(animationName);
   const animation = player.skeleton.data.findAnimation(animationName);
@@ -399,6 +415,8 @@ function isFullPoseAnimation(animationName) {
 }
 
 function getOverlayAnimation(animationName) {
+  const portraitOverlay = portraitComposer.overlay(animationName);
+  if (portraitOverlay) return portraitOverlay;
   if (!animationName || !player?.skeleton?.data) return undefined;
   if (overlayAnimationCache.has(animationName)) return overlayAnimationCache.get(animationName);
   const source = player.skeleton.data.findAnimation(animationName);
@@ -859,6 +877,7 @@ function applyLayerVisibility(resetSlots = true) {
     );
     player.skeleton.setSlotsToSetupPose();
     rebuildLayerVisibilityCache();
+    player.animationState.apply(player.skeleton);
   }
   applyConfiguredLayerVisibility(player.skeleton);
   if (resetSlots) {
@@ -876,7 +895,7 @@ function enforceLayerVisibilityAfterAnimation() {
       : animationState.getCurrent(0)?.animation?.name;
     if (animationName) {
       setAnimationViewport(animationName);
-      const selection = animationGraphPlayer.enabled ? animationGraphPlayer.selection : animationName;
+      const selection = animationGraphPlayer.enabled ? animationGraphPlayer.selection : portraitComposer.toolbarSelection || animationName;
       if (selection && animationSelect.value !== selection) animationSelect.value = selection;
     }
     const result = originalApply(skeleton);
@@ -996,7 +1015,14 @@ function playAction(actionName) {
   const holdMs = Number.isFinite(configuredHoldMs) ? Math.max(0, configuredHoldMs) : defaultHoldMs;
   const actionDurationMs = (actionAnimation?.duration || 0) * 1000 + holdMs;
   behaviorDirector.noteActivity(actionDurationMs);
+  portraitComposer.toolbarSelection = undefined;
   animationSelect.value = action.animation;
+  if (portraitComposer.play(action.animation)) {
+    portraitComposer.toolbarSelection = undefined;
+    if (action.voicePool) playVoice(action.voicePool);
+    return true;
+  }
+  portraitComposer.ensureExpression();
   player.animationState.setAnimation(0, action.animation, Boolean(action.loop));
   setAnimationViewport(action.animation);
   const returnToIdle = action.returnToIdle !== false;
@@ -1047,12 +1073,18 @@ function playAnimation(animationName, { holdFinal = false } = {}) {
     }
   }
   if (!animationNames.includes(animationName)) return;
-  window.AsterPet.releaseAnimationPose(player);
   toolbarAnimationActive = holdFinal;
   const animation = player.skeleton.data.findAnimation(animationName);
   behaviorDirector.noteActivity((animation?.duration || 0) * 1000);
   actionChoreographer.interrupt();
+  if (portraitComposer.play(animationName)) {
+    animationSelect.value = animationName;
+    return;
+  }
+  window.AsterPet.releaseAnimationPose(player);
+  portraitComposer.toolbarSelection = undefined;
   player.animationState.clearTracks();
+  portraitComposer.ensureExpression();
   const loop = !holdFinal || animationName === scene.actions.idle.animation;
   const entry = player.animationState.setAnimation(0, animationName, loop);
   if (holdFinal && !loop) entry.listener = { complete: () => {
@@ -1394,6 +1426,7 @@ function calculateAnimationVisibleBounds(animationNamesToSample) {
         baseAnimation?.apply(sampledSkeleton, baseTime, baseTime, !animationGraphPlayer.cinematic, [], 1, spine.MixBlend.first, spine.MixDirection.mixIn);
         animation.apply(sampledSkeleton, time, time, false, [], 1,
           baseAnimation ? spine.MixBlend.replace : spine.MixBlend.setup, spine.MixDirection.mixIn);
+        portraitComposer.overlay(portraitComposer.neutral?.name)?.apply(sampledSkeleton, time, time, false, [], 1, spine.MixBlend.replace, spine.MixDirection.mixIn);
         animationGraphPlayer.cinematic?.cameraFor(animation.name)?.apply(sampledSkeleton, time, time, true, [], 1, spine.MixBlend.replace, spine.MixDirection.mixIn);
         sampledSkeleton.updateWorldTransform();
         applyConfiguredLayerVisibility(sampledSkeleton, animation.name);
@@ -1556,6 +1589,7 @@ async function selectAppearance(optionId) {
   if (!option.skin || !player?.skeleton?.data?.findSkin(option.skin)) return;
   player.skeleton.setSkinByName(option.skin);
   player.skeleton.setSlotsToSetupPose();
+  portraitComposer.refreshSkin();
   uiState.appearanceByScene[scene.id] = option.skin;
   void persistUiState({ appearanceByScene: uiState.appearanceByScene });
   applyLayerVisibility();
@@ -1624,6 +1658,7 @@ async function initializePlayer() {
       player.skeleton.setSlotsToSetupPose();
     }
     animationGraphPlayer.start(animationNames);
+    if (!animationGraphPlayer.enabled) portraitComposer.start();
     updateInteractionModeButton();
     const animationChoices = animationGraphPlayer.enabled
       ? animationGraphPlayer.choices()

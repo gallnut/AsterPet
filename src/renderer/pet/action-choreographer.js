@@ -16,11 +16,12 @@
   }
 
   class ActionChoreographer {
-    constructor({ getPlayer, getScene, getAnimationNames, getOverlayAnimation, onAnimation, log }) {
+    constructor({ getPlayer, getScene, getAnimationNames, getOverlayAnimation, resolveAgentAnimation, onAnimation, log }) {
       this.getPlayer = getPlayer;
       this.getScene = getScene;
       this.listAnimationNames = getAnimationNames;
       this.getOverlayAnimation = getOverlayAnimation || (animationName => this.getPlayer()?.skeleton?.data?.findAnimation(animationName));
+      this.resolveAgentAnimation = resolveAgentAnimation || (name => name);
       this.onAnimation = onAnimation;
       this.log = log;
       this.actionRecipes = new Map();
@@ -150,7 +151,7 @@
             return leftFace - rightFace;
           });
         }
-        if (entries[0]) resolved.set(key, { ...entries[0], loop: entries[0].loop !== false });
+        if (entries[0]) resolved.set(key, { ...entries[0], inferred: !Object.hasOwn(configuredOverlays, stateName), loop: entries[0].loop !== false });
       }
       return resolved;
     }
@@ -187,7 +188,7 @@
       }
       const overlayAnimation = this.getOverlayAnimation(entry.animation) || sourceAnimation;
       const trackEntry = player.animationState.setAnimationWith
-        ? player.animationState.setAnimationWith(entry.track, overlayAnimation, Boolean(entry.loop))
+        ? player.animationState.setAnimationWith(entry.track, overlayAnimation, Boolean(entry.loop ?? overlayAnimation.portraitLoop))
         : player.animationState.setAnimation(entry.track, entry.animation, Boolean(entry.loop));
       trackEntry.mixDuration = entry.mixDuration;
       this.activeTrack = entry.track;
@@ -240,8 +241,16 @@
       }, Math.max(0, delayMs));
     }
 
+    refreshAgentOverlay() {
+      if (this.activeTrack === this.settings?.agentTrack) this.playAgentOverlay();
+    }
+
     playAgentOverlay() {
-      const entry = this.agentOverlays.get(this.agentState);
+      let entry = this.agentOverlays.get(this.agentState);
+      if (entry?.inferred) {
+        const animation = this.resolveAgentAnimation(entry.animation);
+        entry = animation ? { ...entry, animation } : undefined;
+      }
       if (!entry) {
         if (this.activeTrack !== undefined) this.interrupt();
         return;
