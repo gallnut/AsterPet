@@ -55,7 +55,7 @@ function fixture(copiedBodyKeys) {
   composer.start();
   const idle = player.animationState.setAnimation(0, '00_Idle', true);
   composer.ensureExpression();
-  const step = time => { player.animationState.update(time); player.animationState.apply(player.skeleton); };
+  const step = time => { player.animationState.update(time); composer.beforeApply(); player.animationState.apply(player.skeleton); };
   return { data, player, scene, composer, idle, step, normal, angry };
 }
 
@@ -122,8 +122,101 @@ for (const copiedBodyKeys of [false, true]) {
   assert.equal(composer.role('00_Idle'), undefined, 'a body idle stays the base even in a portrait with only facial channels');
 }
 
+{
+  const f = fixture(true);
+  f.data.slots[55].name = 'hand_variant'; f.data.slots[55].attachmentName = null;
+  f.data.slots[56].name = 'weapon_variant'; f.data.slots[56].attachmentName = null;
+  const alternate = (slot, name) => {
+    const t = new spine.AttachmentTimeline(1, slot); t.setFrame(0, 0, name); return t;
+  };
+  f.data.findAnimation(f.normal).setTimelines([
+    ...f.data.findAnimation(f.normal).timelines.filter(t => ![55, 56].includes(t.slotIndex)),
+    alternate(55, null), alternate(56, null)
+  ]);
+  f.data.findAnimation(f.angry).setTimelines([
+    ...f.data.findAnimation(f.angry).timelines.filter(t => ![55, 56].includes(t.slotIndex)),
+    alternate(55, 'angry'), alternate(56, 'angry')
+  ]);
+  const weightedFace = new spine.MeshAttachment('export-neutral', 'neutral');
+  weightedFace.bones = [1, 0]; weightedFace.vertices = [0, 0, 1];
+  f.data.defaultSkin.setAttachment(0, 'neutral', weightedFace);
+  f.player.skeleton.setToSetupPose(); f.composer.start();
+  assert.ok(!f.composer.slots.has(55) && !f.composer.slots.has(56), 'varying body attachments in facial exports must not become face overlays');
+  assert.ok(!f.composer.bones.has(0), 'a weighted facial mesh does not give its shared body root to the facial layer');
+  f.composer.play(f.angry); f.step(.5);
+  assert.equal(f.player.skeleton.slots[55].attachment, null, 'an expression cannot display an alternate hand over the idle hand');
+  assert.equal(f.player.skeleton.slots[56].attachment, null, 'an expression cannot display a second weapon');
+  assert.equal(f.player.skeleton.slots[3].attachment.name, 'export-body');
+  assert.equal(f.player.skeleton.bones[0].x, 0);
+  assert.equal(f.player.skeleton.bones[1].x, 2.5);
+}
+
+{
+  const f = fixture(false);
+  const blink = new spine.AlphaTimeline(3, 0, 0);
+  blink.setFrame(0, 0, 1); blink.setFrame(1, 1, 0); blink.setFrame(2, 2, 1);
+  const mouth = new spine.AttachmentTimeline(3, 1);
+  mouth.setFrame(0, 0, 'neutral'); mouth.setFrame(1, .8, null); mouth.setFrame(2, 1.1, 'neutral');
+  f.data.findAnimation('00_Idle').setTimelines([
+    ...f.data.findAnimation('00_Idle').timelines.filter(t => !(t.slotIndex === 1 && t.attachmentNames)), blink, mouth
+  ]);
+  f.composer.start(); f.player.animationState.clearTracks();
+  f.player.animationState.setAnimation(0, '00_Idle', true); f.composer.ensureExpression();
+  f.step(.5);
+  assert.equal(f.player.skeleton.slots[0].color.a, .5, 'sparse facial defaults must preserve the native idle blink opacity');
+  f.step(.5); assert.equal(f.player.skeleton.slots[0].color.a, 0);
+  assert.equal(f.player.skeleton.slots[1].attachment, null, 'sparse facial defaults preserve native idle attachment changes');
+  f.step(1.5); assert.equal(f.player.skeleton.slots[0].color.a, .5, 'the native blink remains dynamic on later idle cycles');
+  assert.equal(f.player.skeleton.slots[1].attachment.name, 'export-neutral');
+}
+
 // Exercise the real scheduling classes: attachment-heavy expressions stay on
 // track 1, and inferred speech resolves against the currently selected mood.
+{
+  const f = fixture(true);
+  // Some exports use an additional, alpha-hidden mesh for the performance's
+  // mouth. Facial presets never key it, so retaining their layer over motion
+  // can expose both the preset mouth and this native mouth simultaneously.
+  const alternate = f.data.slots[58];
+  alternate.name = 'performance-mouth'; alternate.boneData = f.data.bones[2];
+  alternate.color.a = 0;
+  const hidden = new spine.AlphaTimeline(1, 0, 58); hidden.setFrame(0, 0, 0);
+  f.data.findAnimation('00_Idle').setTimelines([...f.data.findAnimation('00_Idle').timelines, hidden]);
+  const mouth = new spine.AttachmentTimeline(1, 1); mouth.setFrame(0, 0, null);
+  const alternateMouth = new spine.AttachmentTimeline(1, 58); alternateMouth.setFrame(0, 0, 'talk');
+  const visible = new spine.AlphaTimeline(1, 0, 58); visible.setFrame(0, 0, 1);
+  const eyes = new spine.AttachmentTimeline(1, 0); eyes.setFrame(0, 0, 'talk');
+  const turn = new spine.RotateTimeline(1, 0, 2); turn.setFrame(0, 0, -12);
+  f.data.animations.push(new spine.Animation('motion', [mouth, alternateMouth, visible, eyes, turn], 1));
+  f.composer.start();
+  assert.ok(f.composer.slots.has(58), 'the face domain includes motion-only facial meshes');
+  f.composer.play(f.normal); f.step(.1);
+  f.composer.toolbarSelection = undefined;
+  f.player.animationState.setAnimation(0, 'motion', false);
+  f.player.animationState.addAnimation(0, '00_Idle', true, 1);
+  f.step(.3);
+  assert.equal(f.player.animationState.getCurrent(1), null, 'native performance faces must own the facial channels');
+  assert.equal(f.player.skeleton.slots[1].attachment, null, 'the preset mouth cannot remain above the performance');
+  assert.equal(f.player.skeleton.slots[58].attachment.name, 'export-talk');
+  assert.equal(f.player.skeleton.slots[58].color.a, 1);
+  assert.equal(f.player.skeleton.slots[0].attachment.name, 'export-talk');
+  assert.equal(f.player.skeleton.bones[2].rotation, -12);
+  f.step(.3);
+  assert.equal(f.player.skeleton.slots[58].color.a, 1, 'the face must not be reset on each frame');
+  for (let i = 0; i < 40; i++) f.step(1 / 60);
+  assert.equal(f.player.animationState.getCurrent(0).animation.name, '00_Idle');
+  assert.equal(f.player.animationState.getCurrent(1).animation.name, f.normal);
+  assert.equal(f.player.skeleton.slots[1].attachment.name, 'export-neutral');
+  assert.equal(f.player.skeleton.slots[58].color.a, 0, 'returning to idle hides the authored alternate mouth');
+  assert.equal(f.player.skeleton.bones[2].rotation, 0);
+  // Explicit facial choices remain possible, but must also clear native-only
+  // channels so that they display one complete facial pose.
+  f.player.animationState.setAnimation(0, 'motion', false); f.step(.2);
+  f.composer.play(f.normal); f.step(.2);
+  assert.equal(f.player.skeleton.slots[1].attachment.name, 'export-neutral');
+  assert.equal(f.player.skeleton.slots[58].color.a, 0);
+}
+
 const context = { window: {}, setTimeout, clearTimeout, Date, Math, console };
 vm.createContext(context);
 for (const file of ['ambient-behavior-director.js', 'action-choreographer.js']) {
@@ -146,6 +239,115 @@ ambient.playNext(); step(.4);
 assert.equal(player.animationState.getCurrent(0), idle);
 assert.equal(player.skeleton.slots[0].attachment.name, 'export-angry');
 ambient.stop();
+// Alternate body poses are explicitly selected idle states. Automatic moods
+// stay local to the selected pose and cannot switch its arm/weapon rig.
+{
+  const f = fixture(true);
+  f.data.slots[55].name = 'hand_alternate'; f.data.slots[55].attachmentName = null;
+  const attachments = f.data.slots.map(slot => {
+    const t = new spine.AttachmentTimeline(1, slot.index);
+    t.setFrame(0, 0, slot.index === 3 ? null : slot.index === 55 ? 'angry' : slot.index < 3 ? 'neutral' : 'body');
+    return t;
+  });
+  f.data.animations.push(new spine.Animation('_face2', attachments, 2));
+  const bodyTurn = new spine.RotateTimeline(2, 0, 1);
+  bodyTurn.setFrame(0, 0, 0); bodyTurn.setFrame(1, 2, 20);
+  const unchangedPose = attachments.map(t => {
+    const key = new spine.AttachmentTimeline(1, t.slotIndex);
+    key.setFrame(0, 0, t.slotIndex === 3 ? 'body' : t.slotIndex === 55 ? null : t.attachmentNames[0]); return key;
+  });
+  f.data.animations.push(new spine.Animation('_face3', [...unchangedPose, bodyTurn], 2));
+  f.player.skeleton.setToSetupPose(); f.composer.start();
+  assert.equal(f.composer.isBodyAnimation('_face2'), true);
+  assert.equal(f.composer.isOverlay('_face2'), true, 'automatic expressions remain facial projections');
+  assert.equal(f.composer.isBodyAnimation('_face3'), true, 'native body transforms remain available as manual pose states');
+  assert.equal(f.composer.isOverlay(f.normal), true);
+  assert.equal(f.composer.poseStates.length, 3);
+  const pose = f.composer.selectPose('_face2');
+  f.player.animationState.clearTracks(); f.player.skeleton.setToSetupPose();
+  const base = f.player.animationState.setAnimationWith(0, pose, true);
+  f.composer.ensureExpression(); f.step(.5);
+  assert.equal(f.player.skeleton.slots[3].attachment, null);
+  assert.equal(f.player.skeleton.slots[55].attachment.name, 'export-angry');
+  const auto = new context.window.AsterPet.AmbientBehaviorDirector({
+    getPlayer: () => f.player, getScene: () => f.scene,
+    getAnimationNames: () => f.data.animations.map(a => a.name),
+    isFullPoseAnimation: name => f.composer.isBodyAnimation(name), isOverlayAnimation: name => f.composer.isOverlay(name),
+    getOverlayAnimation: name => f.composer.overlay(name), getBaseAnimation: name => f.composer.bodyAnimation(name),
+    getIdleAnimation: () => f.composer.idleAnimation(), canPlayBaseAnimation: () => !f.composer.activePoseAnimation,
+    canPlay: () => true, onAnimation: name => f.composer.noteOverlay(name), log() {}
+  });
+  auto.start(); const mood = auto.behaviors.find(b => b.animation === '_face3');
+  assert.equal(mood.mode, 'overlay'); assert.equal(mood.role, 'expression');
+  auto.behaviors = [mood]; auto.playNext(); f.step(.3);
+  assert.equal(f.player.animationState.getCurrent(0), base, 'automatic expression changes retain the explicitly selected body idle');
+  assert.equal(f.player.skeleton.slots[3].attachment, null);
+  assert.equal(f.player.skeleton.slots[55].attachment.name, 'export-angry');
+  assert.equal(f.player.skeleton.bones[1].rotation, 0, 'another expression cannot apply its body turn to this pose');
+  for (let frame = 0; frame < 180; frame++) f.step(1 / 60);
+  assert.equal(f.player.animationState.getCurrent(0), base, 'the chosen pose remains a dynamic idle on later cycles');
+  assert.ok(base.loop && base.trackTime > 3);
+  f.composer.play(f.angry); f.step(.2);
+  assert.equal(f.player.animationState.getCurrent(0), base, 'manual moods also retain the selected idle');
+  auto.behaviors = [{ animation: 'body-motion', mode: 'base', role: 'body', weight: 1 }, mood];
+  assert.equal(auto.selectBehavior().animation, mood.animation, 'unpaired body gestures cannot leave a manually selected pose');
+  auto.stop();
+  const original = f.composer.selectPose('00_Idle');
+  f.player.animationState.clearTracks(); f.player.skeleton.setToSetupPose();
+  f.player.animationState.setAnimationWith(0, original, true); f.composer.ensureExpression(); f.step(.1);
+  assert.equal(f.player.skeleton.slots[3].attachment.name, 'export-body');
+  assert.equal(f.player.skeleton.slots[55].attachment, null, 'explicitly returning to the original idle removes the alternate hand');
+
+}
+// Automatic portraits include authored body gestures, with facial presets on
+// their own track. Weapon changes are allowed when the body action keys them.
+{
+  const f = fixture(true);
+  const weapon = new spine.AttachmentTimeline(3, 3);
+  weapon.setFrame(0, 0, 'body'); weapon.setFrame(1, .5, null); weapon.setFrame(2, 1.5, 'body');
+  const gesture = new spine.TranslateTimeline(3, 0, 1);
+  gesture.setFrame(0, 0, 0, 0); gesture.setFrame(1, 1, 0, -20); gesture.setFrame(2, 2, 0, 0);
+  f.data.animations.push(new spine.Animation('motion', [gesture, weapon], 2));
+  f.scene.actions.touch = { animation: 'motion', loop: false };
+  const auto = new context.window.AsterPet.AmbientBehaviorDirector({
+    getPlayer: () => f.player, getScene: () => f.scene,
+    getAnimationNames: () => f.data.animations.map(a => a.name),
+    isFullPoseAnimation: () => false, isOverlayAnimation: name => f.composer.isOverlay(name),
+    getOverlayAnimation: name => f.composer.overlay(name),
+    canPlay: () => f.player.animationState.getCurrent(0)?.animation.name === '00_Idle',
+    onAnimation: name => f.composer.noteOverlay(name), log() {}
+  });
+  auto.start();
+  const body = auto.behaviors.find(b => b.animation === 'motion');
+  assert.equal(body.mode, 'base'); assert.equal(body.track, 0); assert.equal(body.holdMs, 0);
+  assert.ok(auto.behaviors.filter(b => f.composer.isOverlay(b.animation)).every(b => b.track === 1));
+  const savedMath = context.Math;
+  context.Math = Object.create(Math); context.Math.random = () => .1;
+  try {
+    // Even many facial presets cannot push body gestures out of the pool.
+    auto.behaviors = [body, ...Array.from({ length: 40 }, (_, i) => ({ animation: `face-${i}`, role: 'expression', weight: 1 }))];
+    assert.equal(auto.selectBehavior().animation, 'motion');
+  } finally { context.Math = savedMath; }
+  auto.behaviors = [body];
+  f.composer.play(f.angry); f.step(.4); const face = f.player.animationState.getCurrent(1);
+  auto.playNext(); f.step(.8);
+  assert.equal(f.player.animationState.getCurrent(0).animation.name, 'motion');
+  assert.equal(f.player.animationState.getCurrent(1), face, 'body gestures retain the selected facial track');
+  assert.equal(f.player.skeleton.slots[3].attachment, null, 'the body resource can deliberately put its weapon away');
+  for (let frame = 0; frame < 96; frame++) f.step(1 / 60);
+  assert.equal(f.player.animationState.getCurrent(0).animation.name, '00_Idle');
+  assert.equal(f.player.animationState.getCurrent(0).loop, true, 'automatic gestures return to dynamic idle');
+  assert.equal(f.player.skeleton.slots[3].attachment.name, 'export-body');
+  auto.stop();
+  f.scene.behavior = { ambient: [f.normal] };
+  auto.start();
+  assert.ok(!auto.behaviors.some(b => b.animation === 'motion'), 'explicit authored ambient rules remain authoritative');
+  auto.stop();
+  delete f.scene.behavior; f.scene.category = 'interaction'; auto.start();
+  assert.ok(!auto.behaviors.some(b => b.animation === 'motion'), 'portrait inference must not change interaction scene choreography');
+  auto.stop();
+}
+
 const choreographer = new context.window.AsterPet.ActionChoreographer({
   ...options, resolveAgentAnimation: name => composer.talkingAnimation(name)
 });
@@ -155,4 +357,4 @@ assert.equal(player.skeleton.slots[0].attachment.name, 'export-angry');
 composer.play(normal); choreographer.setAgentState('speaking'); step(.4);
 assert.equal(player.animationState.getCurrent(2).animation.name, `${normal}_talk`);
 choreographer.stop();
-console.log('Portrait body, expression, sparse facial reset, skin, speech pairing and scheduler checks passed');
+console.log('Portrait body, expressions, native performance faces, speech and automatic gesture checks passed');

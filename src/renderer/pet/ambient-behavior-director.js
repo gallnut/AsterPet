@@ -2,17 +2,21 @@
   const DEFAULT_OVERLAY_INCLUDE = /(emo|emotion|expression|facial|blink|eyeclose)/i;
   const DEFAULT_OVERLAY_EXCLUDE = /(idle|attack|damage|dead|death|touch|tap|cut[ _-]?in|skill|hit|hurt|die|talk|dizzy|sleep|yawn|stretch|motion)/i;
   const DEFAULT_BASE_INCLUDE = /(dizzy|yawn|stretch|(?:default|feeling)[a-z0-9_-]*idle|idle[_-]?save)/i;
+  const DEFAULT_PORTRAIT_ACTION = /^(?:\d+[_ -]*)?(?:motion|touch|tap)(?:\d+)?$/i;
   const DEFAULT_FACE = /^_?face\d+$/i;
   const DEFAULT_FACE_TALK = /^_?face\d+[_-]?talk$/i;
 
   class AmbientBehaviorDirector {
-    constructor({ getPlayer, getScene, getAnimationNames, isFullPoseAnimation, isOverlayAnimation, getOverlayAnimation, canPlay, onAnimation, log }) {
+    constructor({ getPlayer, getScene, getAnimationNames, isFullPoseAnimation, isOverlayAnimation, getOverlayAnimation, getBaseAnimation, getIdleAnimation, canPlayBaseAnimation, canPlay, onAnimation, log }) {
       this.getPlayer = getPlayer;
       this.getScene = getScene;
       this.listAnimationNames = getAnimationNames;
       this.isOverlayAnimation = isOverlayAnimation || (() => false);
       this.isFullPoseAnimation = isFullPoseAnimation || (() => false);
       this.getOverlayAnimation = getOverlayAnimation || (animationName => this.getPlayer()?.skeleton?.data?.findAnimation(animationName));
+      this.getBaseAnimation = getBaseAnimation || (animationName => this.getPlayer()?.skeleton?.data?.findAnimation(animationName));
+      this.getIdleAnimation = getIdleAnimation || (() => this.getPlayer()?.skeleton?.data?.findAnimation(this.getScene()?.actions?.idle?.animation));
+      this.canPlayBaseAnimation = canPlayBaseAnimation || (() => true);
       this.canPlay = canPlay;
       this.onAnimation = onAnimation;
       this.log = log;
@@ -41,8 +45,10 @@
       ]);
       for (const animationName of transitionAnimations) {
         if (animationName === idleAnimation) continue;
-        player?.animationState?.data?.setMix?.(idleAnimation, animationName, this.settings.mixDuration);
-        player?.animationState?.data?.setMix?.(animationName, idleAnimation, this.settings.mixDuration);
+        const duration = this.getBaseAnimation(animationName)?.duration;
+        const mixDuration = duration > 0 ? Math.min(this.settings.mixDuration, duration / 4) : this.settings.mixDuration;
+        player?.animationState?.data?.setMix?.(idleAnimation, animationName, mixDuration);
+        player?.animationState?.data?.setMix?.(animationName, idleAnimation, mixDuration);
       }
       this.schedule(this.settings.initialDelayMs);
       this.log(`Ambient behavior ready: ${this.behaviors.map(item => item.animation).join(", ")}`);
@@ -112,9 +118,18 @@
     resolveBehaviors(configured, idleAnimation) {
       const animationNames = this.listAnimationNames();
       const explicitlyConfigured = Array.isArray(configured);
+      const scene = this.getScene();
+      const nativeBodyActions = scene?.category === "character"
+        ? [...new Set([
+          scene.actions?.touch?.animation,
+          ...animationNames.filter(name => DEFAULT_PORTRAIT_ACTION.test(name))
+        ])].filter(name => name && name !== idleAnimation && !this.isOverlayAnimation(name)
+          && this.getPlayer()?.skeleton?.data?.findAnimation(name)?.duration > 0)
+        : [];
       const entries = explicitlyConfigured
         ? configured
         : [
+          ...nativeBodyActions.map(animation => ({ animation, role: "body", mode: "base", track: 0, weight: 1, holdMs: 0 })),
           ...animationNames
             .filter(name => DEFAULT_FACE.test(name))
             .map(animation => ({
@@ -145,19 +160,21 @@
       return entries.map(entry => typeof entry === "string" ? { animation: entry, weight: 1 } : entry)
         .filter(entry => entry && animationNames.includes(entry.animation))
         .filter(entry => entry.animation !== idleAnimation)
-        .map(entry => ({
-          animation: entry.animation,
-          weight: Math.max(0.01, Number(entry.weight) || 1),
-          track: this.isOverlayAnimation(entry.animation) ? 1 : this.isFullPoseAnimation(entry.animation)
-            ? 0
-            : Math.max(0, Math.round(Number(entry.track) || 1)),
-          mode: !this.isOverlayAnimation(entry.animation) && (this.isFullPoseAnimation(entry.animation) || entry.mode === "base") ? "base" : "overlay",
-          role: this.isOverlayAnimation(entry.animation) ? "expression" : entry.role || (this.isFullPoseAnimation(entry.animation) || entry.mode === "base" ? "body" : "expression"),
-          loop: typeof entry.loop === "boolean" ? entry.loop : undefined,
-          holdMs: Number.isFinite(Number(entry.holdMs))
-            ? Math.max(0, Number(entry.holdMs))
-            : this.inferredHoldMs(entry.animation)
-        }));
+        .map(entry => {
+          const overlay = this.isOverlayAnimation(entry.animation);
+          const base = !overlay && (this.isFullPoseAnimation(entry.animation) || entry.mode === "base");
+          return {
+            animation: entry.animation,
+            weight: Math.max(0.01, Number(entry.weight) || 1),
+            track: base ? 0 : overlay ? 1 : Math.max(0, Math.round(Number(entry.track) || 1)),
+            mode: base ? "base" : "overlay",
+            role: base ? "body" : overlay ? "expression" : entry.role || "expression",
+            loop: typeof entry.loop === "boolean" ? entry.loop : undefined,
+            holdMs: base && !explicitlyConfigured ? 0 : Number.isFinite(Number(entry.holdMs))
+              ? Math.max(0, Number(entry.holdMs))
+              : this.inferredHoldMs(entry.animation)
+          };
+        });
     }
 
     inferredWeight(animationName) {
@@ -192,16 +209,23 @@
     }
 
     selectBehavior() {
-      const alternatives = this.behaviors.length > 1
-        ? this.behaviors.filter(item => item.animation !== this.lastAnimation)
-        : this.behaviors;
-      const totalWeight = alternatives.reduce((sum, item) => sum + item.weight, 0);
+      const allowed = this.behaviors.filter(item => item.mode !== "base" || this.canPlayBaseAnimation(item.animation));
+      const alternatives = allowed.length > 1 ? allowed.filter(item => item.animation !== this.lastAnimation) : allowed;
+      let candidates = alternatives;
+      if (!this.settings.ambient) {
+        const body = alternatives.filter(item => item.role === "body");
+        const expressions = alternatives.filter(item => item.role !== "body");
+        // The number of facial presets must not bury the authored body actions
+        // in the weighted pool. Leave idle time between body performances.
+        if (body.length && expressions.length) candidates = Math.random() < 0.4 ? body : expressions;
+      }
+      const totalWeight = candidates.reduce((sum, item) => sum + item.weight, 0);
       let cursor = Math.random() * totalWeight;
-      for (const behavior of alternatives) {
+      for (const behavior of candidates) {
         cursor -= behavior.weight;
         if (cursor <= 0) return behavior;
       }
-      return alternatives.at(-1);
+      return candidates.at(-1);
     }
 
     playNext() {
@@ -212,8 +236,9 @@
         return;
       }
       const behavior = this.selectBehavior();
-      if (!behavior) return;
-      const animation = player.skeleton.data.findAnimation(behavior.animation);
+      if (!behavior) { this.schedule(); return; }
+      const animation = behavior.mode === "base" ? this.getBaseAnimation(behavior.animation)
+        : player.skeleton.data.findAnimation(behavior.animation);
       if (!animation) {
         this.schedule();
         return;
@@ -222,8 +247,13 @@
       const track = behavior.mode === "base" ? 0 : behavior.track;
       const visibleDurationMs = Math.max(animation.duration * 1000, behavior.holdMs);
       if (track === 0) {
-        player.animationState.setAnimation(0, behavior.animation, false);
-        player.animationState.addAnimation(0, scene.actions.idle.animation, true, visibleDurationMs / 1000);
+        if (player.animationState.setAnimationWith) player.animationState.setAnimationWith(0, animation, false);
+        else player.animationState.setAnimation(0, behavior.animation, false);
+        const idle = this.getIdleAnimation();
+        const mixDuration = player.animationState.data.getMix?.(behavior.animation, idle.name) ?? this.settings.mixDuration;
+        const returnDelay = Math.max(0, visibleDurationMs / 1000 - mixDuration);
+        if (player.animationState.addAnimationWith) player.animationState.addAnimationWith(0, idle, true, returnDelay);
+        else player.animationState.addAnimation(0, idle.name, true, returnDelay);
       } else {
         this.interruptOverlay();
         const animation = this.getOverlayAnimation(behavior.animation);

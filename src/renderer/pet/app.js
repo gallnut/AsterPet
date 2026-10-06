@@ -94,10 +94,13 @@ const behaviorDirector = new window.AsterPet.AmbientBehaviorDirector({
   isFullPoseAnimation: animationName => isFullPoseAnimation(animationName),
   isOverlayAnimation: animationName => portraitComposer.isOverlay(animationName),
   getOverlayAnimation: animationName => getOverlayAnimation(animationName),
+  getBaseAnimation: animationName => portraitComposer.bodyAnimation(animationName) || player?.skeleton?.data?.findAnimation(animationName),
+  getIdleAnimation: () => portraitComposer.idleAnimation() || player?.skeleton?.data?.findAnimation(scene?.actions?.idle?.animation),
+  canPlayBaseAnimation: () => !portraitComposer.activePoseAnimation,
   canPlay: () => {
-    if (disposing || toolbarAnimationActive || currentAgentState !== "idle") return false;
+    if (disposing || stateLocked || toolbarAnimationActive || currentAgentState !== "idle") return false;
     const currentAnimation = player?.animationState?.getCurrent(0)?.animation?.name;
-    return currentAnimation === scene?.actions?.idle?.animation;
+    return currentAnimation === (portraitComposer.idleAnimationName || scene?.actions?.idle?.animation);
   },
   onAnimation: animationName => {
     portraitComposer.noteOverlay(animationName);
@@ -397,6 +400,7 @@ const fullPoseAnimationCache = new Map();
 const overlayAnimationCache = new Map();
 
 function isFullPoseAnimation(animationName) {
+  if (portraitComposer.isBodyAnimation(animationName)) return true;
   if (portraitComposer.isOverlay(animationName)) return false;
   if (!animationName || !player?.skeleton?.data) return false;
   if (fullPoseAnimationCache.has(animationName)) return fullPoseAnimationCache.get(animationName);
@@ -890,6 +894,7 @@ function enforceLayerVisibilityAfterAnimation() {
   const animationState = player.animationState;
   const originalApply = animationState.apply.bind(animationState);
   animationState.apply = skeleton => {
+    portraitComposer.beforeApply();
     const animationName = animationGraphPlayer.enabled
       ? animationGraphPlayer.viewportAnimation
       : animationState.getCurrent(0)?.animation?.name;
@@ -993,10 +998,23 @@ function playAction(actionName) {
   }
   if (!player?.animationState) return false;
   const resolvedActionName = Object.keys(scene.actions).find(name => name.toLowerCase() === requestedAction.toLowerCase());
-  const action = scene.actions[resolvedActionName];
+  let action = scene.actions[resolvedActionName];
   if (!action || !animationNames.includes(action.animation)) {
     petLog(`Scene action unavailable: ${requestedAction}`);
     return false;
+  }
+  if (portraitComposer.activePoseAnimation) {
+    if (resolvedActionName === "idle") action = { ...action, animation: portraitComposer.idleAnimationName };
+    else if (!portraitComposer.isOverlay(action.animation)) {
+      // An unpaired body motion belongs to the original idle. React locally
+      // within the chosen pose instead of jumping back to that original rig.
+      const expressions = [...portraitComposer.roles].filter(([, role]) => role === "expression").map(([name]) => name);
+      const expression = expressions[(expressions.indexOf(portraitComposer.currentExpression) + 1) % expressions.length];
+      behaviorDirector.noteActivity();
+      portraitComposer.play(expression); portraitComposer.toolbarSelection = undefined;
+      if (action.voicePool) playVoice(action.voicePool);
+      return true;
+    }
   }
   toolbarAnimationActive = false;
   window.AsterPet.releaseAnimationPose(player);
@@ -1009,6 +1027,16 @@ function playAction(actionName) {
       petLog(`Playing graph action ${resolvedActionName}: ${animation}`);
       return true;
     }
+  }
+  if (portraitComposer.isPoseAnimation(action.animation) && resolvedActionName === "idle") {
+    const current = player.animationState.getCurrent(0);
+    if (current?.animation.name === portraitComposer.idleAnimationName && current.loop) {
+      portraitComposer.ensureExpression(); player.play(); return true;
+    }
+    player.animationState.clearTracks();
+    player.skeleton.setToSetupPose();
+    player.animationState.setAnimationWith(0, portraitComposer.idleAnimation(), true);
+    portraitComposer.ensureExpression(); player.play(); return true;
   }
   const configuredHoldMs = Number(action.holdMs);
   const defaultHoldMs = resolvedActionName.toLowerCase() === "dead" ? 200 : 0;
@@ -1023,7 +1051,9 @@ function playAction(actionName) {
     return true;
   }
   portraitComposer.ensureExpression();
-  player.animationState.setAnimation(0, action.animation, Boolean(action.loop));
+  const bodyExpression = portraitComposer.bodyAnimation(action.animation);
+  if (bodyExpression) player.animationState.setAnimationWith(0, bodyExpression, Boolean(action.loop));
+  else player.animationState.setAnimation(0, action.animation, Boolean(action.loop));
   setAnimationViewport(action.animation);
   const returnToIdle = action.returnToIdle !== false;
   if (!action.loop && returnToIdle) {
@@ -1073,7 +1103,20 @@ function playAnimation(animationName, { holdFinal = false } = {}) {
     }
   }
   if (!animationNames.includes(animationName)) return;
-  toolbarAnimationActive = holdFinal;
+  if (portraitComposer.isPoseAnimation(animationName)) {
+    window.AsterPet.releaseAnimationPose(player);
+    actionChoreographer.interrupt(); behaviorDirector.noteActivity();
+    const idle = portraitComposer.selectPose(animationName);
+    toolbarAnimationActive = false;
+    player.animationState.clearTracks();
+    player.skeleton.setToSetupPose();
+    player.animationState.setAnimationWith(0, idle, true).mixDuration = 0;
+    portraitComposer.ensureExpression();
+    setAnimationViewport(animationName); animationSelect.value = animationName;
+    localStorage.setItem(`portraitIdlePose:${scene.id}`, animationName);
+    player.config.animation = animationName; player.play(); return;
+  }
+  toolbarAnimationActive = holdFinal && !(portraitComposer.enabled && animationName === scene.actions.idle.animation);
   const animation = player.skeleton.data.findAnimation(animationName);
   behaviorDirector.noteActivity((animation?.duration || 0) * 1000);
   actionChoreographer.interrupt();
@@ -1086,7 +1129,9 @@ function playAnimation(animationName, { holdFinal = false } = {}) {
   player.animationState.clearTracks();
   portraitComposer.ensureExpression();
   const loop = !holdFinal || animationName === scene.actions.idle.animation;
-  const entry = player.animationState.setAnimation(0, animationName, loop);
+  const bodyExpression = portraitComposer.bodyAnimation(animationName);
+  const entry = bodyExpression ? player.animationState.setAnimationWith(0, bodyExpression, loop)
+    : player.animationState.setAnimation(0, animationName, loop);
   if (holdFinal && !loop) entry.listener = { complete: () => {
     if (!toolbarAnimationActive || player.animationState.getCurrent(0) !== entry) return;
     window.AsterPet.holdAnimationPose(player);
@@ -1658,11 +1703,15 @@ async function initializePlayer() {
       player.skeleton.setSlotsToSetupPose();
     }
     animationGraphPlayer.start(animationNames);
-    if (!animationGraphPlayer.enabled) portraitComposer.start();
+    if (!animationGraphPlayer.enabled) {
+      portraitComposer.start();
+      const savedPose = localStorage.getItem(`portraitIdlePose:${scene.id}`);
+      if (savedPose && portraitComposer.isPoseAnimation(savedPose)) portraitComposer.selectPose(savedPose);
+    }
     updateInteractionModeButton();
     const animationChoices = animationGraphPlayer.enabled
       ? animationGraphPlayer.choices()
-      : animationNames.map(id => ({ id, label: id }));
+      : portraitComposer.enabled ? portraitComposer.choices(animationNames) : animationNames.map(id => ({ id, label: id }));
     for (const choice of animationChoices) {
       const option = document.createElement("option");
       option.value = choice.id;
