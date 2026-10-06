@@ -9,17 +9,178 @@
     return match && { family: match[1].toUpperCase(), suffix: match[2] };
   }
 
+  function cinematicAnimation(data, runtime, name) {
+    const source = data.findAnimation(name);
+    if (!source) return undefined;
+    const parts = cutParts(name);
+    const mainName = parts?.suffix && !/^_(?:\d|all|idle|camera)/i.test(parts.suffix)
+      ? data.animations.find(a => cutParts(a.name)?.family === parts.family && !cutParts(a.name).suffix)?.name
+      : name.match(/^(loop_?\d+|loop|idle_?\d*)(_[a-z].*)$/i)?.[1];
+    const main = mainName && data.findAnimation(mainName);
+    if (!main || isArchive(name)) return source;
+    const count = animation => new Set(animation.timelines.filter(t => Number.isInteger(t.boneIndex)).map(t => t.boneIndex)).size;
+    // Sparse named variants change accessories/visibility and rely on the
+    // full shot for pose movement. They are not independent setup-pose scenes.
+    if (count(main) < 8 || count(source) >= count(main) * 0.3) return source;
+    const attachments = source.timelines.filter(t => t.attachmentNames);
+    const clears = attachments.filter(t => !t.attachmentNames.some(Boolean));
+    // Isolated effect exports often clear virtually every other slot so the
+    // effect can be rendered alone. Those clears must not erase its parent shot.
+    const isolatedEffect = clears.length >= 8 && clears.length >= attachments.length * 0.9;
+    const timelines = isolatedEffect ? source.timelines.filter(t => !clears.includes(t)) : source.timelines;
+    const keyed = new Set(timelines.flatMap(t => t.getPropertyIds()));
+    const defaults = main.timelines.filter(t => !t.events && t.getPropertyIds().every(id => !keyed.has(id)));
+    return new runtime.Animation(source.name, [...defaults, ...timelines], Math.max(source.duration, main.duration));
+  }
+
+  function cinematicSceneAnimation(data, runtime, name) {
+    let source = cinematicAnimation(data, runtime, name);
+    if (!source) return undefined;
+    // Exporters can place water/background/effects in a separate render pass.
+    // Bulk null keys isolate that pass for export; they must not erase the
+    // foreground when the two passes are played as one scene.
+    const scope = name.slice(0, name.lastIndexOf("/") + 1);
+    const parts = cutParts(name);
+    const main = parts?.suffix && !/^_(?:\d|all|idle|camera)/i.test(parts.suffix)
+      ? data.animations.find(a => a.name.startsWith(scope) && cutParts(a.name)?.family === parts.family && !cutParts(a.name).suffix)?.name
+      : leaf(name).match(/^(loop_?\d+|loop|idle_?\d*)(_[a-z].*)$/i)?.[1];
+    const base = main && (data.findAnimation(main) ? main : `${scope}${main}`);
+    const passSuffix = /^(?:water(?:drop)?|bg(?:_back|_front)?|background(?:_back|_front)?|fx|ef|effect|fire|flame|smoke|cloud|rain|snow|candle|light|lighting|sparks?|particles?|shadow(?:_?\d+(?:_\d+)*)?)$/i;
+    const passesByRole = new Map();
+    // A named foreground variant inherits its view's scene passes, unless it
+    // supplies its own pass for that role. Alternatives are never stacked.
+    for (const owner of [...new Set([base, name].filter(Boolean))]) {
+      for (const pass of data.animations) {
+        if (!pass.name.toLowerCase().startsWith(`${owner.toLowerCase()}_`)) continue;
+        const suffix = pass.name.slice(owner.length + 1);
+        if (passSuffix.test(suffix)) passesByRole.set(suffix.toLowerCase(), pass);
+      }
+    }
+    const passes = [...passesByRole.values()];
+    for (const pass of passes) {
+      const attachments = pass.timelines.filter(t => t.attachmentNames);
+      const clears = attachments.filter(t => !t.attachmentNames.some(Boolean));
+      const visibleSlots = new Set(attachments.filter(t => t.attachmentNames.some(Boolean)).map(t => t.slotIndex));
+      if (!visibleSlots.size || clears.length < 8 || clears.length < attachments.length * .9) continue;
+      const bones = new Set();
+      const addBone = index => {
+        for (let bone = data.bones[index]; bone; bone = bone.parent) bones.add(bone.index);
+      };
+      for (const index of visibleSlots) {
+        addBone(data.slots[index].boneData.index);
+        for (const skin of data.skins || []) {
+          const entries = []; skin.getAttachmentsForSlot(index, entries);
+          for (const { attachment } of entries) if (attachment?.bones) {
+            for (let i = 0; i < attachment.bones.length;) {
+              const count = attachment.bones[i++];
+              for (let j = 0; j < count; j++) addBone(attachment.bones[i++]);
+            }
+          }
+        }
+      }
+      const owned = new Set(source.timelines.flatMap(t => t.getPropertyIds()));
+      const additions = pass.timelines.filter(t => {
+        if (Number.isInteger(t.slotIndex)) return visibleSlots.has(t.slotIndex);
+        if (!Number.isInteger(t.boneIndex) || !bones.has(t.boneIndex)) return false;
+        const bone = data.bones[t.boneIndex], view = cutParts(bone.name);
+        if (!bone.parent || /^(?:[a-z]|all|master|camera)$/i.test(bone.name) || view && !view.suffix) return false;
+        // Shared foreground/camera channels retain their native pose. Only
+        // unkeyed dependencies of the pass's visible artwork accompany it.
+        return t.getPropertyIds().every(id => !owned.has(id));
+      });
+      const replaced = new Set(additions.flatMap(t => t.getPropertyIds()));
+      source = new runtime.Animation(source.name,
+        [...source.timelines.filter(t => t.getPropertyIds().every(id => !replaced.has(id))), ...additions], source.duration);
+    }
+    return source;
+  }
+
+  function cinematicLoopAnimation(data, runtime, loop, base, skin) {
+    if (!base) return loop;
+    const skeleton = new runtime.Skeleton(data);
+    if (skin) skeleton.setSkin(skin);
+    skeleton.setToSetupPose();
+    base.apply(skeleton, 0, base.duration, false, [], 1, runtime.MixBlend.replace, runtime.MixDirection.mixIn);
+    const previous = skeleton.slots.map(slot => slot.getAttachment());
+    loop.apply(skeleton, 0, 0, true, [], 1, runtime.MixBlend.replace, runtime.MixDirection.mixIn);
+    const influences = new Set();
+    for (const slot of skeleton.slots) {
+      const mesh = slot.getAttachment(), old = previous[slot.data.index];
+      if (!(mesh instanceof runtime.MeshAttachment) || !(old instanceof runtime.MeshAttachment)
+        || mesh === old || mesh.timelineAttachment === old.timelineAttachment
+        || mesh.worldVerticesLength === old.worldVerticesLength) continue;
+      // A replacement mesh has a different binding. Unkeyed joint channels
+      // must use that binding's setup values, not the previous mesh's cut pose.
+      if (mesh.bones) for (let i = 0; i < mesh.bones.length;) {
+        const count = mesh.bones[i++];
+        for (let j = 0; j < count; j++) influences.add(mesh.bones[i++]);
+      }
+      else influences.add(slot.data.boneData.index);
+    }
+    skeleton.dispose?.();
+    const owned = new Set(loop.timelines.flatMap(t => t.getPropertyIds()));
+    const inherited = new Set(base.timelines.flatMap(t => t.getPropertyIds()));
+    const classes = [runtime.RotateTimeline, runtime.TranslateXTimeline, runtime.TranslateYTimeline,
+      runtime.ScaleXTimeline, runtime.ScaleYTimeline, runtime.ShearXTimeline, runtime.ShearYTimeline];
+    const defaults = [];
+    for (const index of influences) {
+      const bone = data.bones[index];
+      // Shared view/camera containers retain the completed shot's framing.
+      const parts = cutParts(bone.name);
+      if (!bone.parent || /^(?:[a-z]|all|master)$/i.test(bone.name) || parts && !parts.suffix) continue;
+      for (let type = 0; type < classes.length; type++) {
+        const property = `${type}|${index}`;
+        if (!inherited.has(property) || owned.has(property)) continue;
+        const timeline = new classes[type](1, 0, index);
+        timeline.setFrame(0, 0, type === 3 || type === 4 ? 1 : 0);
+        defaults.push(timeline);
+      }
+    }
+    return defaults.length ? new runtime.Animation(loop.name, [...defaults, ...loop.timelines], loop.duration) : loop;
+  }
+
+  function offstageCinematicViews(skeleton, runtime, groups, frame) {
+    if (!frame) return [];
+    const marginX = frame.size.x * .04, marginY = frame.size.y * .04;
+    return groups.flatMap(group => {
+      let drawable = false;
+      for (const index of group) {
+        const slot = skeleton.slots[index], attachment = slot?.getAttachment();
+        const vertices = [];
+        if (attachment instanceof runtime.RegionAttachment) {
+          vertices.length = 8; attachment.computeWorldVertices(slot, vertices, 0, 2);
+        } else if (attachment instanceof runtime.MeshAttachment) {
+          vertices.length = attachment.worldVerticesLength;
+          attachment.computeWorldVertices(slot, 0, vertices.length, vertices, 0, 2);
+        } else continue;
+        drawable = true;
+        let left = Infinity, right = -Infinity, bottom = Infinity, top = -Infinity;
+        for (let i = 0; i < vertices.length; i += 2) {
+          left = Math.min(left, vertices[i]); right = Math.max(right, vertices[i]);
+          bottom = Math.min(bottom, vertices[i + 1]); top = Math.max(top, vertices[i + 1]);
+        }
+        if (right >= frame.offset.x - marginX && left <= frame.offset.x + frame.size.x + marginX
+          && top >= frame.offset.y - marginY && bottom <= frame.offset.y + frame.size.y + marginY) return [];
+      }
+      return drawable ? group : [];
+    });
+  }
+
   function buildCinematicRigVisibility(data) {
     // View containers may be nested under a shared All/Master camera bone.
-    // Only containers with an exact cut name identify a view; numbered child
-    // bones (A_cut2, etc.) are parts of that view rather than new cameras.
-    const roots = new Set(data.bones.filter(bone => {
+    // Exact cut names or matching bare shot letters identify a view; numbered
+    // child bones (A_cut2, etc.) belong to that view rather than new cameras.
+    const cutFamilies = new Set(data.animations.map(a => cutParts(a.name)?.family).filter(Boolean));
+    const viewFamily = bone => {
       const parts = cutParts(bone.name);
-      if (!parts || parts.suffix) return false;
-      for (let parent = bone.parent; parent; parent = parent.parent) {
-        const outer = cutParts(parent.name);
-        if (outer && !outer.suffix) return false;
-      }
+      if (parts && !parts.suffix) return parts.family;
+      // Some exports name their shot containers A/B, without a cut suffix.
+      const family = /^[a-z]$/i.test(bone.name) && bone.name.toUpperCase();
+      return family && cutFamilies.has(family) ? family : undefined;
+    };
+    const roots = new Set(data.bones.filter(bone => {
+      if (!viewFamily(bone)) return false;
+      for (let parent = bone.parent; parent; parent = parent.parent) if (viewFamily(parent)) return false;
       return true;
     }));
     const rootFor = bone => {
@@ -29,15 +190,124 @@
     for (const root of roots) if (slotRoots.filter(value => value === root).length < 8) roots.delete(root);
     const masks = new Map();
     if (roots.size < 2) return masks;
-    for (const animation of data.animations) {
+    const keyedRoots = animation => {
       const bones = new Map([...roots].map(root => [root, new Set()]));
       for (const timeline of animation.timelines) {
         if (!Number.isInteger(timeline.boneIndex)) continue;
-        // Setup/reset scale keys on a whole rig do not activate that viewpoint.
         const bone = data.bones[timeline.boneIndex], root = rootFor(bone);
         if (root && bone !== root) bones.get(root)?.add(bone.index);
       }
-      const active = [...bones].filter(([, keyed]) => keyed.size >= 8).map(([root]) => root);
+      const maximum = Math.max(0, ...[...bones.values()].map(keyed => keyed.size));
+      const active = [...bones].filter(([, keyed]) => keyed.size >= 8 && keyed.size >= maximum * 0.6).map(([root]) => root);
+      if (!active.length) {
+        const family = cutParts(animation.name)?.family;
+        const named = [...roots].find(root => viewFamily(root) === family);
+        if (named) active.push(named);
+      }
+      return active;
+    };
+    // A mesh may live on the shared root while all its vertex weights belong
+    // to one shot. Follow those authored influences, not the slot container.
+    for (const slot of data.slots) {
+      if (slotRoots[slot.index]) continue;
+      const influences = new Set();
+      for (const skin of data.skins || []) {
+        const entries = []; skin.getAttachmentsForSlot(slot.index, entries);
+        for (const { attachment } of entries) if (attachment?.bones) {
+          for (let i = 0; i < attachment.bones.length;) {
+            const count = attachment.bones[i++];
+            for (let j = 0; j < count; j++) {
+              const root = rootFor(data.bones[attachment.bones[i++]]);
+              if (root) influences.add(root);
+            }
+          }
+        }
+      }
+      if (influences.size === 1) slotRoots[slot.index] = [...influences][0];
+    }
+    // Unnamed views can be nested inside a shot or parked beside it. Use
+    // their shared bone branch as one view, rather than filtering its parts.
+    const hasPrefix = (slot, root) => slot.name.replace(/^\(sh\)/i, "").toUpperCase().startsWith(`${viewFamily(root)}_`);
+    const namespaced = new Set([...roots].filter(root => data.slots.filter(slot => slotRoots[slot.index] === root && hasPrefix(slot, root)).length >= 8));
+    const primary = new Set(data.slots.filter(slot => {
+      const root = slotRoots[slot.index];
+      return root && (!namespaced.has(root) || hasPrefix(slot, root));
+    }).map(slot => slot.index));
+    const slotBones = slot => {
+      const influences = new Set();
+      for (const skin of data.skins || []) {
+        const entries = []; skin.getAttachmentsForSlot(slot.index, entries);
+        for (const { attachment } of entries) if (attachment?.bones) {
+          for (let i = 0; i < attachment.bones.length;) {
+            const count = attachment.bones[i++];
+            for (let j = 0; j < count; j++) influences.add(data.bones[attachment.bones[i++]]);
+          }
+        }
+      }
+      return influences.size ? [...influences] : [slot.boneData];
+    };
+    const scaffold = new Set();
+    for (const index of primary) for (let bone of slotBones(data.slots[index])) {
+      for (; bone; bone = bone.parent) scaffold.add(bone);
+    }
+    const groups = new Map();
+    for (const slot of data.slots) {
+      if (primary.has(slot.index)) continue;
+      const influences = slotBones(slot);
+      let anchor = influences[0];
+      while (anchor && !influences.every(bone => {
+        for (; bone; bone = bone.parent) if (bone === anchor) return true;
+        return false;
+      })) anchor = anchor.parent;
+      while (anchor?.parent && !scaffold.has(anchor.parent)) anchor = anchor.parent;
+      const key = anchor && !scaffold.has(anchor) ? `bone:${anchor.index}` : `slot:${slot.index}`;
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(slot.index);
+    }
+    masks.independentViewGroups = [...groups.values()];
+    masks.sceneFrameIgnoredSlots = masks.independentViewGroups.flat();
+    const auxiliaryBranch = bone => {
+      while (bone?.parent?.parent) bone = bone.parent;
+      return bone?.parent && !roots.has(bone) ? bone : undefined;
+    };
+    const auxiliaryOwners = new Map();
+    for (const animation of data.animations) {
+      const active = keyedRoots(animation);
+      if (active.length !== 1) continue;
+      for (const timeline of animation.timelines) {
+        if (timeline.attachmentNames && !timeline.attachmentNames.some(Boolean)) continue;
+        const bone = Number.isInteger(timeline.boneIndex) ? data.bones[timeline.boneIndex]
+          : Number.isInteger(timeline.slotIndex) ? data.slots[timeline.slotIndex].boneData : undefined;
+        const branch = auxiliaryBranch(bone);
+        if (!branch) continue;
+        if (!auxiliaryOwners.has(branch)) auxiliaryOwners.set(branch, new Set());
+        auxiliaryOwners.get(branch).add(active[0]);
+      }
+    }
+    for (const slot of data.slots) {
+      if (slotRoots[slot.index]) continue;
+      const owners = auxiliaryOwners.get(auxiliaryBranch(slot.boneData));
+      if (owners?.size === 1) slotRoots[slot.index] = [...owners][0];
+    }
+    // Static sibling pieces can be exported directly on the shared root.
+    // Associate only uniquely owned numbered siblings; shared scenery stays.
+    const stem = name => name.replace(/[_\s-]*\d+$/, "").toLowerCase();
+    const siblingOwners = new Map();
+    for (const slot of data.slots) {
+      const root = slotRoots[slot.index];
+      if (!root) continue;
+      const key = stem(slot.name);
+      if (!siblingOwners.has(key)) siblingOwners.set(key, new Set());
+      siblingOwners.get(key).add(root);
+    }
+    for (const slot of data.slots) {
+      if (slotRoots[slot.index] || slot.boneData.parent) continue;
+      const owners = siblingOwners.get(stem(slot.name));
+      if (owners?.size === 1) slotRoots[slot.index] = [...owners][0];
+    }
+    for (const animation of data.animations) {
+      if (fullCut(animation.name)) continue;
+      const active = keyedRoots(animation);
       if (active.length !== 1) continue; // Authored multi-view cuts/crossfades retain their visibility keys.
       const selected = active[0];
       const inactive = new Set([...roots].filter(root => root !== selected));
@@ -94,8 +364,9 @@
   }
 
   function inferCinematicPlan(data, runtime, fallbackIdle) {
-    const loops = data.animations.filter(a => isLoop(a.name));
-    const cuts = data.animations.filter(a => cutParts(a.name) || fullCut(a.name) || /^cut$/i.test(leaf(a.name)));
+    const loops = data.animations.filter(a => isLoop(a.name)).map(a => cinematicAnimation(data, runtime, a.name));
+    const cuts = data.animations.filter(a => cutParts(a.name) || fullCut(a.name) || /^cut$/i.test(leaf(a.name)))
+      .map(a => cinematicAnimation(data, runtime, a.name));
     if (!loops.length || !cuts.length) return undefined;
     const names = new Map(data.animations.map(a => [a.name.toLowerCase(), a.name]));
     const canonicalLoops = loops.filter(a => !isArchive(a.name) && /^(?:loop_?\d*|idle_?\d*|.*_cut_idle|cut_.*_idle)$/i.test(leaf(a.name)));
@@ -146,7 +417,13 @@
           for (let j = 0; j < count; j += 1) addBone(influences[offset++]);
         }
       });
-      const ranked = loops.filter(loop => !isArchive(loop.name)).map(loop => {
+      const ranked = loops.filter(loop => {
+        if (isArchive(loop.name)) return false;
+        const variant = loop.name.match(/^(loop_?\d+|loop|idle_?\d*)(_[a-z].*)$/i);
+        // A projected effect loop duplicates the main body's endpoint. Match
+        // it only to its named cut variant so it cannot obscure the main pair.
+        return !variant || loop === data.findAnimation(loop.name) || cutParts(cut.name)?.suffix === variant[2];
+      }).map(loop => {
         const phases = [0, 0.25, 0.5, 0.75].map(fraction => {
           // An idle may omit channels that the cut establishes (especially attachments).
           skeleton.setToSetupPose(); apply(cut, cut.duration); apply(loop, loop.duration * fraction);
@@ -255,6 +532,38 @@
       return cut ? this.shotId(cut) : name;
     }
     hiddenRigSlots(name) { return this.rigVisibility.get(name) || this.rigVisibility.get(this.baseFor(name)) || []; }
+    framingAnimation(name) {
+      const state = this.getPlayer().animationState;
+      const base = state.getCurrent(0), companion = state.getCurrent(1);
+      return base?.animation.name === name && base.timeScale === 0 && companion?.loop
+        && this.baseFor(companion.animation.name) === name ? companion.animation.name : name;
+    }
+    getFramingRange(name) {
+      const state = this.getPlayer().animationState;
+      const entry = [state.getCurrent(1), state.getCurrent(0)].find(e => e?.animation.name === name);
+      return entry?.loop && entry.animationStart > 0
+        ? { start: entry.animationStart, end: entry.animationEnd } : undefined;
+    }
+    independentViewGroups(name) {
+      return this.rigVisibility.has(name) || this.rigVisibility.has(this.baseFor(name))
+        ? this.rigVisibility.independentViewGroups || [] : [];
+    }
+    sceneFrameIgnoredSlots(name) {
+      return this.rigVisibility.has(name) || this.rigVisibility.has(this.baseFor(name))
+        ? this.rigVisibility.sceneFrameIgnoredSlots || [] : [];
+    }
+    animationFor(name) {
+      this.playbackAnimations ||= new Map();
+      const { data, skin } = this.getPlayer().skeleton;
+      const key = `${name}:${skin?.name || ""}`;
+      if (!this.playbackAnimations.has(key)) {
+        const source = cinematicSceneAnimation(data, this.spineRuntime, name);
+        const predecessor = this.baseFor(name);
+        const animation = predecessor ? cinematicLoopAnimation(data, this.spineRuntime, source, this.animationFor(predecessor), skin) : source;
+        this.playbackAnimations.set(key, animation);
+      }
+      return this.playbackAnimations.get(key);
+    }
     cameraFor(name) {
       const camera = this.plan.cameras.get(name);
       if (!camera) return undefined;
@@ -287,11 +596,11 @@
       if (!terminal) {
         player.animationState.clearTracks(); player.skeleton.setToSetupPose();
         if (predecessor) {
-          terminal = player.animationState.setAnimation(0, predecessor, false);
+          terminal = player.animationState.setAnimationWith(0, this.animationFor(predecessor), false);
           terminal.trackTime = terminal.animation.duration; terminal.timeScale = 0;
         }
       } else { terminal.trackTime = terminal.animationEnd - terminal.animationStart; terminal.timeScale = 0; }
-      const entry = player.animationState.setAnimation(terminal ? 1 : 0, name, true);
+      const entry = player.animationState.setAnimationWith(terminal ? 1 : 0, this.animationFor(name), true);
       entry.mixDuration = 0;
       entry.trackTime = phase * entry.animation.duration;
       if (!continuation) this.applyCamera(name, terminal?.animation.duration);
@@ -300,7 +609,7 @@
     shot(name, generation, holdFinal) {
       const player = this.getPlayer();
       player.animationState.clearTracks(); player.skeleton.setToSetupPose();
-      const entry = player.animationState.setAnimation(0, name, false);
+      const entry = player.animationState.setAnimationWith(0, this.animationFor(name), false);
       entry.mixDuration = 0;
       this.applyCamera(name);
       this.show(name);
@@ -319,7 +628,7 @@
         this.tailRuntime().loopAnimationTail(player, entry, { minimumStart: this.cameraTimes(name).at(-1) });
         // A held raw clip has not actually entered another loop state.
         this.currentState = ending?.loop || name; this.onState(this.currentState);
-        // Keep the selected shot and its viewport. Explicitly choosing a loop
+        // Keep the selected shot and its authored terminal frame. Choosing a loop
         // still plays that resource loop; a completed shot stays in its tail.
         this.log(`Cinematic terminal idle: ${name}, ${entry.animationStart.toFixed(3)}–${entry.animationEnd.toFixed(3)}`);
       } };
@@ -358,7 +667,7 @@
       const next = shots[index < 0 ? (direction < 0 ? shots.length - 1 : 0) : (index + direction + shots.length) % shots.length];
       return this.play(this.plan.shots.includes(next) ? this.shotId(next) : next, { holdFinal: false });
     }
-    cameraTimes(name) { return cinematicCutTimes(this.getPlayer().skeleton.data, this.getPlayer().skeleton.data.findAnimation(name)); }
+    cameraTimes(name) { return cinematicCutTimes(this.getPlayer().skeleton.data, this.animationFor(name)); }
     cameraSegment(name) {
       const state = this.getPlayer().animationState;
       const entry = [state.getCurrent(1), state.getCurrent(0)].find(e => e?.animation.name === name);
@@ -368,7 +677,7 @@
       return Math.max(0, times.findLastIndex(start => start <= time));
     }
   }
-  const exports = { CinematicPlayer, inferCinematicPlan, cinematicCutTimes, buildCinematicRigVisibility };
+  const exports = { CinematicPlayer, inferCinematicPlan, cinematicCutTimes, buildCinematicRigVisibility, cinematicAnimation, cinematicSceneAnimation, cinematicLoopAnimation, offstageCinematicViews };
   if (typeof module !== "undefined" && module.exports) module.exports = exports;
   if (typeof window !== "undefined") Object.assign(window.AsterPet ||= {}, exports);
 })();

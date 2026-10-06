@@ -367,12 +367,6 @@ function isInternalSlot(slotName) {
   return internalHiddenPatterns.some(pattern => pattern.test(slotName));
 }
 
-function isLayoutDecorationSlot(slotName) {
-  const group = findPropGroup(slotName);
-  if (["background", "effect", "interface", "internal"].includes(group?.role)) return true;
-  return backgroundPatterns.some(pattern => pattern.test(slotName));
-}
-
 function resolveSlotStagePrefix(slot) {
   const slotPrefix = slot?.data?.name?.match(/^(?:\(sh\))?([ABCS])_/i)?.[1];
   if (slotPrefix) return slotPrefix.toUpperCase();
@@ -660,7 +654,6 @@ function setFilteredLayerVisibility(visible) {
 
 function buildPropControls() {
   propsList.replaceChildren();
-  const defaultVisible = new Set(scene.layers?.defaultVisibleSlots || []);
   const persistedVisibility = readPersistedPropSlots();
   for (const group of propGroups) {
     const slots = player.skeleton.slots.filter(slot => findPropGroup(slot.data.name) === group);
@@ -693,16 +686,11 @@ function buildPropControls() {
       const checkbox = document.createElement("input");
       checkbox.type = "checkbox";
       checkbox.dataset.slotName = slot.data.name;
-      const defaultChecked = defaultVisible.has(slot.data.name)
-        || group.defaultVisible === true
-        || (group.defaultVisible === undefined && scene.layers?.defaultPropsVisible === true);
       checkbox.checked = persistedVisibility
         ? persistedVisibility.legacy && (group.role === "character" || group.role === "internal")
-          ? defaultChecked
+          ? true
           : persistedVisibility.visibleSlots.has(slot.data.name)
-        : defaultVisible.has(slot.data.name)
-        || group.defaultVisible === true
-        || (group.defaultVisible === undefined && scene.layers?.defaultPropsVisible === true);
+        : true;
       checkbox.addEventListener("change", () => {
         updateGroupState();
         applyLayerVisibility();
@@ -890,10 +878,37 @@ function applyLayerVisibility(resetSlots = true) {
   }
 }
 
+function applyIndependentViewVisibility(skeleton, animationName) {
+  const cinematic = animationGraphPlayer.cinematic;
+  const groups = cinematic?.independentViewGroups(animationName) || [];
+  if (!groups.length) return;
+  const frame = getVisibleSkeletonBounds(skeleton, cinematic.sceneFrameIgnoredSlots(animationName));
+  const inactive = new Set(window.AsterPet.offstageCinematicViews(skeleton, spine, groups, frame));
+  const alphas = skeleton.asterPetViewAlphas ||= new Map();
+  for (const [index, alpha] of alphas) if (!inactive.has(index)) {
+    skeleton.slots[index].color.a = alpha; alphas.delete(index);
+  }
+  for (const index of inactive) {
+    if (!alphas.has(index)) alphas.set(index, skeleton.slots[index].color.a);
+    skeleton.slots[index].color.a = 0;
+  }
+}
+
 function enforceLayerVisibilityAfterAnimation() {
   const animationState = player.animationState;
   const originalApply = animationState.apply.bind(animationState);
+  const skeleton = player.skeleton;
+  const updateWorld = skeleton.updateWorldTransform.bind(skeleton);
+  skeleton.updateWorldTransform = (...args) => {
+    const result = updateWorld(...args);
+    applyIndependentViewVisibility(skeleton, animationGraphPlayer.viewportAnimation);
+    return result;
+  };
   animationState.apply = skeleton => {
+    // A view may move into the main scene through its native animation. Restore
+    // authored opacity before applying the next frame or manual layer switches.
+    for (const [index, alpha] of skeleton.asterPetViewAlphas || []) skeleton.slots[index].color.a = alpha;
+    skeleton.asterPetViewAlphas?.clear();
     portraitComposer.beforeApply();
     const animationName = animationGraphPlayer.enabled
       ? animationGraphPlayer.viewportAnimation
@@ -1268,12 +1283,15 @@ function setAnimationViewport(animationName) {
   if (!player || !animationName) return;
   const cinematic = animationGraphPlayer.cinematic;
   const segment = cinematic?.cameraSegment(animationName) ?? 0;
-  const viewportKey = cinematic ? `${animationName}:${segment}` : animationName;
+  const framingAnimation = cinematic?.framingAnimation(animationName) || animationName;
+  const framingRange = cinematic?.getFramingRange(framingAnimation);
+  const framingKey = framingRange ? `${framingAnimation}:tail:${framingRange.start}:${framingRange.end}` : framingAnimation;
+  const viewportKey = cinematic ? `${animationName}:${framingKey}:${segment}` : animationName;
   if (activeViewportAnimation === viewportKey) return;
   try {
     if (cinematic) {
-      if (!cinematicViewports.has(animationName)) cinematicViewports.set(animationName, calculateCinematicViewports(animationName));
-      const viewport = cinematicViewports.get(animationName)?.[segment];
+      if (!cinematicViewports.has(framingKey)) cinematicViewports.set(framingKey, calculateCinematicViewports(framingAnimation, framingRange));
+      const viewport = cinematicViewports.get(framingKey)?.[framingRange || framingAnimation !== animationName ? 0 : segment];
       if (viewport) {
         animationViewports[animationName] = viewport;
         const padding = scene.viewport?.padding ?? "4%";
@@ -1311,10 +1329,10 @@ function setAnimationViewport(animationName) {
   }
 }
 
-function calculateCinematicViewports(animationName) {
+function calculateCinematicViewports(animationName, framingRange) {
   const cinematic = animationGraphPlayer.cinematic;
   const data = player.skeleton.data;
-  const animation = data.findAnimation(animationName);
+  const animation = cinematic.animationFor(animationName);
   const skeleton = new spine.Skeleton(data);
   if (player.skeleton.skin) skeleton.setSkin(player.skeleton.skin);
   skeleton.scaleX = player.skeleton.scaleX;
@@ -1322,11 +1340,11 @@ function calculateCinematicViewports(animationName) {
   skeleton.x = player.skeleton.x;
   skeleton.y = player.skeleton.y;
   const baseName = cinematic.baseFor(animationName);
-  const base = baseName && data.findAnimation(baseName);
-  const times = cinematic.cameraTimes(animationName);
+  const base = baseName && cinematic.animationFor(baseName);
+  const times = framingRange ? [framingRange.start] : cinematic.cameraTimes(animationName);
   try {
     return times.map((start, index) => {
-      const end = times[index + 1] ?? animation.duration;
+      const end = times[index + 1] ?? framingRange?.end ?? animation.duration;
       const bounds = [];
       const count = Math.max(2, Math.min(60, Math.ceil((end - start) * 30)));
       for (let sample = 0; sample < count; sample += 1) {
@@ -1338,7 +1356,7 @@ function calculateCinematicViewports(animationName) {
         cinematic.cameraFor(animationName)?.apply(skeleton, time, time, true, [], 1, spine.MixBlend.replace, spine.MixDirection.mixIn);
         skeleton.updateWorldTransform();
         applyConfiguredLayerVisibility(skeleton, animationName);
-        const visible = getVisibleSkeletonBounds(skeleton);
+        const visible = getVisibleSkeletonBounds(skeleton, cinematic.sceneFrameIgnoredSlots(animationName));
         if (visible) bounds.push(visible);
       }
       const merged = mergeViewportBounds(bounds);
@@ -1347,9 +1365,10 @@ function calculateCinematicViewports(animationName) {
   } finally { skeleton.dispose?.(); }
 }
 
-function getVisibleSkeletonBounds(targetSkeleton = player?.skeleton) {
+function getVisibleSkeletonBounds(targetSkeleton = player?.skeleton, ignoredSlots = []) {
   if (!targetSkeleton) return undefined;
   const skeleton = targetSkeleton;
+  const ignored = new Set(ignoredSlots);
   const vertices = [];
   const clipper = new spine.SkeletonClipping();
   const color = new spine.Color(1, 1, 1, 1);
@@ -1365,7 +1384,7 @@ function getVisibleSkeletonBounds(targetSkeleton = player?.skeleton) {
       continue;
     }
     const alpha = skeleton.color.a * slot.color.a * (attachment?.color?.a ?? 1);
-    if (!attachment || alpha <= 0.02 || isLayoutDecorationSlot(slot.data.name)) {
+    if (!attachment || alpha <= 0.02 || ignored.has(slot.data.index)) {
       clipper.clipEndWithSlot(slot);
       continue;
     }
@@ -1457,10 +1476,12 @@ function calculateAnimationVisibleBounds(animationNamesToSample) {
     : undefined;
   try {
     const animations = sourceSkeleton.data.animations;
-    for (const animation of animations) {
-      if (!sampledAnimationNames.has(animation.name)) continue;
+    for (const sourceAnimation of animations) {
+      if (!sampledAnimationNames.has(sourceAnimation.name)) continue;
+      const animation = animationGraphPlayer.cinematic?.animationFor(sourceAnimation.name) || sourceAnimation;
       const baseAnimationName = animationGraphPlayer.getBaseAnimation(animation.name);
-      const baseAnimation = baseAnimationName && sourceSkeleton.data.findAnimation(baseAnimationName);
+      const baseAnimation = baseAnimationName && (animationGraphPlayer.cinematic?.animationFor(baseAnimationName)
+        || sourceSkeleton.data.findAnimation(baseAnimationName));
       const sampleCount = Math.max(24, Math.min(120, Math.ceil(animation.duration * 60)));
       for (let sample = 0; sample < sampleCount; sample += 1) {
         const time = animation.duration > 0
@@ -1475,7 +1496,7 @@ function calculateAnimationVisibleBounds(animationNamesToSample) {
         animationGraphPlayer.cinematic?.cameraFor(animation.name)?.apply(sampledSkeleton, time, time, true, [], 1, spine.MixBlend.replace, spine.MixDirection.mixIn);
         sampledSkeleton.updateWorldTransform();
         applyConfiguredLayerVisibility(sampledSkeleton, animation.name);
-        const bounds = getVisibleSkeletonBounds(sampledSkeleton);
+        const bounds = getVisibleSkeletonBounds(sampledSkeleton, animationGraphPlayer.cinematic?.sceneFrameIgnoredSlots(animation.name));
         if (!bounds) continue;
         animationUnions.set(animation.name, mergeBounds(animationUnions.get(animation.name), bounds));
         if (animation.name === idleAnimationName) idleUnion = mergeBounds(idleUnion, bounds);
