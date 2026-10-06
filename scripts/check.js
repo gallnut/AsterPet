@@ -28,6 +28,13 @@ for (const relativePath of ["package.json", "resources/scenes/layer-rules.json",
   JSON.parse(fs.readFileSync(path.join(projectRoot, relativePath), "utf8"));
 }
 
+run(process.execPath, [path.join(projectRoot, "scripts", "check-animation-graph.mjs")]);
+run(process.execPath, [path.join(projectRoot, "scripts", "check-cinematic-player.mjs")]);
+run(process.execPath, [path.join(projectRoot, "scripts", "check-animation-tail-loop.mjs")]);
+run(process.execPath, [path.join(projectRoot, "scripts", "check-pet-interaction.mjs")]);
+run(process.execPath, [path.join(projectRoot, "scripts", "check-window-drag.js")]);
+run(process.execPath, [path.join(projectRoot, "scripts", "check-camera-view.mjs")]);
+
 run(process.execPath, [path.join(projectRoot, "scripts", "migrate-layer-metadata.mjs"), "--check"]);
 run(process.execPath, [path.join(projectRoot, "scripts", "check-licenses.js")]);
 
@@ -72,11 +79,11 @@ const sceneFamilies = resolveSceneFamilies({
 if (sceneFamilies.length !== 2 || sceneFamilies.find(family => family.label === "服装 A")?.entries.length !== 2) {
   throw new Error("Logical scene families were not resolved");
 }
-const sylviaFamilies = resolveSceneFamilies({
-  "sylvia-v1": { packageId: "bd2-sylvia", characterId: "bd2-sylvia", category: "character", title: "Sylvia Crimson Lotus standing席比雅 红莲 立绘", characterTitle: "席比雅" },
-  "sylvia-v2": { packageId: "bd2-sylvia", characterId: "bd2-sylvia", category: "character", title: "Sylvia Crimson Lotus standing席比雅 红莲 立绘v2", characterTitle: "席比雅" }
+const versionedFamilies = resolveSceneFamilies({
+  "example-v1": { packageId: "example-character", characterId: "example-character", category: "character", title: "Example Costume standing示例角色 示例服装 立绘", characterTitle: "示例角色" },
+  "example-v2": { packageId: "example-character", characterId: "example-character", category: "character", title: "Example Costume standing示例角色 示例服装 立绘v2", characterTitle: "示例角色" }
 });
-if (sylviaFamilies.length !== 1 || sylviaFamilies[0].entries.length !== 2) {
+if (versionedFamilies.length !== 1 || versionedFamilies[0].entries.length !== 2) {
   throw new Error("Versioned legacy scenes were not grouped as variants");
 }
 if (resolveControlHost({ DESKTOP_PET_CONTROL_HOST: "0.0.0.0" }) !== "127.0.0.1") {

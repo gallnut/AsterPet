@@ -2,13 +2,14 @@ const fs = require("node:fs");
 const path = require("node:path");
 
 class WindowManager {
-  constructor({ app, BrowserWindow, screen, projectRoot, nativeWayland, waylandBridge, log }) {
+  constructor({ app, BrowserWindow, screen, projectRoot, nativeWayland, waylandBridge, x11Bridge, log }) {
     this.app = app;
     this.BrowserWindow = BrowserWindow;
     this.screen = screen;
     this.projectRoot = projectRoot;
     this.nativeWayland = nativeWayland;
     this.waylandBridge = waylandBridge;
+    this.x11Bridge = x11Bridge;
     this.log = log;
     this.petWindow = undefined;
     this.statusWindow = undefined;
@@ -24,7 +25,7 @@ class WindowManager {
     this.petSurfaceHeight = 720;
     this.embeddedStatusVisible = false;
     this.embeddedStatusBaseWidth = 380;
-    this.macOSUtilityReserveWidth = 320;
+    this.utilityReserveWidth = 320;
     this.toolbarVisible = false;
     this.toolbarHeight = 122;
     this.currentContext = { state: "idle" };
@@ -37,10 +38,53 @@ class WindowManager {
     this.shutdownWaiter = undefined;
   }
 
-  keepVisibleAboveMacOSFullScreen(window) {
-    if (process.platform !== "darwin") return;
-    window.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
-    window.setFullScreenable(false);
+  keepVisibleOnWorkspaces(window) {
+    if (process.platform === "darwin") {
+      window.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+      window.setFullScreenable(false);
+    } else if (process.platform === "linux" && !this.nativeWayland) {
+      window.setVisibleOnAllWorkspaces(true);
+    }
+  }
+
+  watchWorkspaceVisibility() {
+    if (process.platform !== "linux" || this.nativeWayland || !this.x11Bridge?.watchWorkspaceChanges) return;
+    const watching = this.x11Bridge.watchWorkspaceChanges(() => {
+      if (this.shuttingDown) return;
+      // GNOME gesture effects/extensions can hide the compositor actor while
+      // the X11 window still reports visible. Remap after the gesture settles.
+      clearTimeout(this.workspaceRestoreTimer);
+      this.workspaceRestoreTimer = setTimeout(() => {
+        this.workspaceRestoreTimer = undefined;
+        if (this.shuttingDown) return;
+        this.refreshVisibleWindows();
+      }, 350);
+    });
+    this.log(`Native workspace visibility watcher: ${watching ? "ready" : "unavailable"}`);
+  }
+
+  refreshVisibleWindows() {
+    const visible = [this.petWindow, this.statusWindow, this.popoverWindow]
+      .filter(window => window && !window.isDestroyed() && !window.isMinimized() && window.isVisible());
+    for (const window of visible) this.remapWindow(window);
+  }
+
+  remapWindow(window) {
+    if (process.platform === "linux" && !this.nativeWayland) window.hide();
+    this.keepVisibleOnWorkspaces(window);
+    window.showInactive();
+    window.moveTop();
+    window.webContents.invalidate();
+  }
+
+  showPet() {
+    const window = this.petWindow;
+    if (!window || window.isDestroyed()) return;
+    if (window.isMinimized()) window.restore();
+    this.remapWindow(window);
+    window.focus();
+    this.positionStatusWindow();
+    this.log("Pet window recalled");
   }
 
   create() {
@@ -52,6 +96,7 @@ class WindowManager {
       backgroundColor: "#00000000",
       frame: false,
       resizable: false,
+      ...(process.platform === "linux" && !this.nativeWayland ? { type: "dock" } : {}),
       ...(process.platform === "darwin" ? { type: "panel", enableLargerThanScreen: true } : {}),
       fullscreenable: false,
       alwaysOnTop: true,
@@ -61,11 +106,12 @@ class WindowManager {
     });
     this.petWindow.setBackgroundColor("#00000000");
     this.petWindow.setAlwaysOnTop(true, "screen-saver");
-    this.keepVisibleAboveMacOSFullScreen(this.petWindow);
+    this.keepVisibleOnWorkspaces(this.petWindow);
 
     if (!this.nativeWayland) this.createStatusWindows();
     this.bindPetWindowEvents();
     this.loadPetWindow();
+    this.watchWorkspaceVisibility();
   }
 
   createStatusWindows() {
@@ -87,7 +133,7 @@ class WindowManager {
     });
     this.statusWindow.setBackgroundColor("#00000000");
     this.statusWindow.setAlwaysOnTop(true, "screen-saver");
-    this.keepVisibleAboveMacOSFullScreen(this.statusWindow);
+    this.keepVisibleOnWorkspaces(this.statusWindow);
     this.statusWindow.loadFile(path.join(this.projectRoot, "src", "renderer", "status", "index.html"));
     this.statusWindow.webContents.on("did-finish-load", () => {
       this.publishContext(this.currentContext);
@@ -112,7 +158,7 @@ class WindowManager {
     });
     this.popoverWindow.setBackgroundColor("#00000000");
     this.popoverWindow.setAlwaysOnTop(true, "screen-saver");
-    this.keepVisibleAboveMacOSFullScreen(this.popoverWindow);
+    this.keepVisibleOnWorkspaces(this.popoverWindow);
     this.popoverWindow.loadFile(path.join(this.projectRoot, "src", "renderer", "popover", "index.html"));
     this.popoverWindow.on("blur", () => this.popoverWindow?.hide());
   }
@@ -154,7 +200,7 @@ class WindowManager {
     this.petWindow.webContents.once("did-finish-load", () => {
       this.log("Page finished loading");
       if (process.env.PET_SWITCH_TEST === "1") {
-        const targets = (process.env.PET_SWITCH_TARGETS || process.env.PET_SWITCH_TARGET || "H019")
+        const targets = (process.env.PET_SWITCH_TARGETS || process.env.PET_SWITCH_TARGET || "")
           .split(",").map(target => target.trim()).filter(Boolean);
         targets.forEach((target, index) => {
           setTimeout(() => {
@@ -244,7 +290,7 @@ class WindowManager {
         }, 3200);
       }
       const switchTestDuration = process.env.PET_SWITCH_TEST === "1"
-        ? (process.env.PET_SWITCH_TARGETS || process.env.PET_SWITCH_TARGET || "H019").split(",").length * 850
+        ? (process.env.PET_SWITCH_TARGETS || process.env.PET_SWITCH_TARGET || "").split(",").filter(target => target.trim()).length * 850
         : 0;
       const testHoldDuration = Math.max(0, Number(process.env.PET_TEST_HOLD_MS) || 0);
       setTimeout(async () => {
@@ -442,9 +488,9 @@ class WindowManager {
       return;
     }
     const current = this.petWindow.getBounds();
-    const reserveWidth = process.platform === "darwin" && this.toolbarVisible ? this.macOSUtilityReserveWidth : 0;
+    const reserveWidth = this.toolbarVisible ? this.utilityReserveWidth : 0;
     const desiredWidth = this.petContentWidth + reserveWidth;
-    const desiredHeight = this.petContentHeight + (process.platform === "darwin" && this.toolbarVisible ? this.toolbarHeight : 0);
+    const desiredHeight = this.petContentHeight + (this.toolbarVisible ? this.toolbarHeight : 0);
     const desiredX = Math.round(current.x + (current.width - reserveWidth - this.petContentWidth) / 2);
     const desiredY = current.y + current.height - desiredHeight;
     this.petWindow.setBounds({
@@ -457,15 +503,15 @@ class WindowManager {
     this.positionStatusWindow();
   }
 
-  syncMacOSToolsWindow() {
-    if (process.platform !== "darwin" || !this.petWindow || this.petWindow.isDestroyed()) return;
+  syncToolsWindow() {
+    if (this.nativeWayland || !this.petWindow || this.petWindow.isDestroyed()) return;
     const current = this.petWindow.getBounds();
-    const width = this.petContentWidth + (this.toolbarVisible ? this.macOSUtilityReserveWidth : 0);
+    const width = this.petContentWidth + (this.toolbarVisible ? this.utilityReserveWidth : 0);
     const height = this.petContentHeight + (this.toolbarVisible ? this.toolbarHeight : 0);
     if (current.width === width && current.height === height) return;
     this.petWindow.setBounds({
       x: current.x + current.width - width,
-      y: current.y + current.height - height,
+      y: current.y,
       width,
       height
     }, false);
@@ -477,7 +523,7 @@ class WindowManager {
     if (this.toolbarVisible === next) return;
     this.toolbarVisible = next;
     this.syncEmbeddedStatusWindow();
-    this.syncMacOSToolsWindow();
+    this.syncToolsWindow();
   }
 
   completeShutdown() {
@@ -507,6 +553,8 @@ class WindowManager {
   }
 
   async shutdown() {
+    this.shuttingDown = true;
+    clearTimeout(this.workspaceRestoreTimer);
     if (!this.petWindow || this.petWindow.isDestroyed()) return;
     await new Promise(resolve => {
       const timeout = setTimeout(() => {
@@ -590,15 +638,16 @@ class WindowManager {
 
   setMousePassthrough(enabled) {
     if (!this.petWindow) return;
-    if (this.nativeWayland) {
-      this.petWindow.setIgnoreMouseEvents(false);
+    if (process.platform === "linux") {
+      // Linux has no forwarding while ignored. Native input regions preserve
+      // events on the pet without toggling the entire window off and on.
       return;
     }
     this.petWindow.setIgnoreMouseEvents(enabled, { forward: true });
   }
 
   setInputShape(inputShape) {
-    if (!this.petWindow || !this.nativeWayland || !inputShape || !Array.isArray(inputShape.rects)) return;
+    if (!this.petWindow || (!this.nativeWayland && !this.x11Bridge) || !inputShape || !Array.isArray(inputShape.rects)) return;
     const bounds = this.petWindow.getContentBounds();
     const normalize = inputRects => inputRects.map(rect => {
       const x = Math.max(0, Math.min(bounds.width - 1, Math.round(Number(rect?.x) || 0)));
@@ -615,6 +664,15 @@ class WindowManager {
     const rects = [...normalize(rawPetRects.slice(0, 2048)), ...normalize(rawControlRects)];
     if (rects.length === 0) return;
     try {
+      if (!this.nativeWayland) {
+        const applied = this.x11Bridge.setInputRegion(this.petWindow.getNativeWindowHandle(), rects);
+        if (!applied) throw new Error("X11 input region unavailable");
+        if (!this.inputShapeLogged) {
+          this.inputShapeLogged = true;
+          this.log(`X11 native input region applied with ${rawPetRects.length} pet rectangles and ${rawControlRects.length} control rectangles`);
+        }
+        return;
+      }
       const rawEnabled = process.env.ASTERPET_DISABLE_RAW_INPUT_REGION !== "1";
       const nativeApplied = Boolean(rawEnabled && this.waylandBridge?.setInputRegion?.(rects));
       if (!nativeApplied) this.petWindow.setShape(rects);

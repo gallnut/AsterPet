@@ -6,6 +6,7 @@
       this.stableSurface = stableSurface;
       this.player = undefined;
       this.generation = 0;
+      this.view = { zoom: 1, panX: 0, panY: 0 };
       this.contentWidth = 0;
       this.contentHeight = 0;
       this.contentLeft = 0;
@@ -183,9 +184,14 @@
     }
 
     configureStableSurface(player) {
-      if (!this.stableSurface || player.asterPetStableSurfaceConfigured) return;
+      if (player.asterPetStableSurfaceConfigured) return;
       player.asterPetStableSurfaceConfigured = true;
-      player.sceneRenderer.resize = () => this.applyStableRenderSize();
+      const originalResize = player.sceneRenderer.resize.bind(player.sceneRenderer);
+      player.sceneRenderer.resize = (...args) => {
+        if (this.stableSurface) this.applyStableRenderSize();
+        else originalResize(...args);
+        this.applyStableViewport();
+      };
       const originalSetViewport = player.setViewport.bind(player);
       player.setViewport = animation => {
         const result = originalSetViewport(animation);
@@ -193,6 +199,7 @@
         this.applyStableViewport();
         return result;
       };
+      player.asterPetLogicalViewport = { ...player.currentViewport };
       const parent = document.getElementById(this.parentId);
       this.setContentSize(
         this.contentWidth || parent?.clientWidth || 1,
@@ -252,18 +259,21 @@
     applyStableViewport() {
       const player = this.player;
       const viewport = player?.asterPetLogicalViewport;
-      if (!this.stableSurface || !viewport || this.contentWidth <= 0 || this.contentHeight <= 0) return;
+      if (!viewport || !Number.isFinite(viewport.width) || viewport.width <= 0 || viewport.height <= 0) return;
+      const contentWidth = this.stableSurface ? this.contentWidth : player.canvas.clientWidth;
+      const contentHeight = this.stableSurface ? this.contentHeight : player.canvas.clientHeight;
+      if (contentWidth <= 0 || contentHeight <= 0) return;
       const padLeft = Number(viewport.padLeft) || 0;
       const padRight = Number(viewport.padRight) || 0;
       const padTop = Number(viewport.padTop) || 0;
       const padBottom = Number(viewport.padBottom) || 0;
       const width = viewport.width + padLeft + padRight;
       const height = viewport.height + padTop + padBottom;
-      const centerX = viewport.x - padLeft + width / 2;
-      const centerY = viewport.y - padBottom + height / 2;
-      const worldUnitsPerPixel = Math.max(width / this.contentWidth, height / this.contentHeight);
-      const surfaceWorldWidth = worldUnitsPerPixel * this.surfaceWidth;
-      const surfaceWorldHeight = worldUnitsPerPixel * this.surfaceHeight;
+      const worldUnitsPerPixel = Math.max(width / contentWidth, height / contentHeight) / this.view.zoom;
+      const centerX = viewport.x - padLeft + width / 2 - this.view.panX * worldUnitsPerPixel * contentWidth;
+      const centerY = viewport.y - padBottom + height / 2 + this.view.panY * worldUnitsPerPixel * contentHeight;
+      const surfaceWorldWidth = worldUnitsPerPixel * (this.stableSurface ? this.surfaceWidth : contentWidth);
+      const surfaceWorldHeight = worldUnitsPerPixel * (this.stableSurface ? this.surfaceHeight : contentHeight);
       player.currentViewport = {
         x: centerX - surfaceWorldWidth / 2,
         y: centerY - surfaceWorldHeight / 2,
@@ -275,6 +285,17 @@
         padBottom: 0
       };
       player.previousViewport = undefined;
+    }
+
+    setView(view) {
+      const number = (value, fallback) => Number.isFinite(Number(value)) ? Number(value) : fallback;
+      this.view = {
+        zoom: Math.max(0.1, Math.min(10, number(view?.zoom, 1))),
+        panX: Math.max(-10, Math.min(10, number(view?.panX, 0))),
+        panY: Math.max(-10, Math.min(10, number(view?.panY, 0)))
+      };
+      this.applyStableViewport();
+      return { ...this.view };
     }
 
     clearCanvas() {

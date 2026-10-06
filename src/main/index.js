@@ -1,5 +1,5 @@
 const path = require("node:path");
-const { app, BrowserWindow, dialog, ipcMain, net, protocol, screen } = require("electron");
+const { app, BrowserWindow, dialog, globalShortcut, ipcMain, net, protocol, screen } = require("electron");
 const { DshDriver } = require("./ai/drivers/dsh/dsh-driver");
 const { ExternalAiService } = require("./ai/external-ai-service");
 const { ControlServer } = require("./control-server");
@@ -13,7 +13,7 @@ const { DialogThemeService } = require("./themes/dialog-theme-service");
 const { WindowManager } = require("./window-manager");
 
 const projectRoot = path.resolve(__dirname, "../..");
-const { nativeWayland, waylandBridge } = configurePlatform(app, projectRoot);
+const { nativeWayland, waylandBridge, x11Bridge } = configurePlatform(app, projectRoot);
 
 protocol.registerSchemesAsPrivileged([{
   scheme: "asterpet",
@@ -32,6 +32,7 @@ const windows = new WindowManager({
   projectRoot,
   nativeWayland,
   waylandBridge,
+  x11Bridge,
   log
 });
 const dshDriver = new DshDriver({
@@ -83,22 +84,23 @@ app.whenReady().then(() => {
   log("App ready");
   scenes.registerProtocol();
   windows.create();
+  const recallRegistered = globalShortcut.register("CommandOrControl+Alt+P", () => windows.showPet());
+  log(`Recall shortcut Ctrl/Cmd+Alt+P: ${recallRegistered ? "ready" : "unavailable"}`);
   controlServer.start();
   externalAi.start();
 });
 
 app.on("second-instance", () => {
-  if (!windows.petWindow || windows.petWindow.isDestroyed()) return;
-  if (windows.petWindow.isMinimized()) windows.petWindow.restore();
-  windows.petWindow.show();
-  windows.petWindow.focus();
+  windows.showPet();
 });
+app.on("activate", () => windows.showPet());
 
 let shutdownStarted = false;
 app.on("before-quit", event => {
   if (shutdownStarted) return;
   event.preventDefault();
   shutdownStarted = true;
+  globalShortcut.unregisterAll();
   externalAi.stop();
   controlServer.stop();
   waylandBridge?.shutdown?.();

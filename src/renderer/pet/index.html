@@ -23,15 +23,22 @@
     <button id="import-package" title="导入 .asterpet 人物包">导入</button>
     <button id="packages-toggle" title="管理人物包">资源</button>
     <button id="ai-settings" title="设置外部 AI 与对话皮肤">AI</button>
-    <button id="mirror" tilte="水平镜像" aria-pressed="false">镜像</button>
+    <div id="view-controls">
+      <button id="mirror" title="水平镜像" aria-pressed="false">镜像</button>
+      <button id="camera-reset" title="复位镜头缩放与位置">复位</button>
+    </div>
     <button id="window-menu" title="打开 GNOME 窗口菜单">窗口</button>
+    <div id="playback-controls">
+      <button id="interaction-mode" title="手动：左键下一个动作，中键上一个动作；点击切换自动播放" hidden>手动</button>
+      <button id="state-lock" title="固定当前动作，防止人物点击切换动作" aria-pressed="false">固定</button>
+    </div>
     <button id="chat-toggle" title="开始与 LLM 对话">对话</button>
     <button id="props-toggle" title="逐项选择图层与组件">图层</button>
     <select id="animations" title="选择动画"></select>
     <button id="next" title="下一个动画">▶</button>
-    <button id="zoom-out" title="缩小人物">−</button>
-    <span id="zoom-label">75%</span>
-    <button id="zoom-in" title="放大人物">＋</button>
+    <button id="zoom-out" title="缩小窗口">−</button>
+    <button id="zoom-label" title="窗口比例；点击复位镜头">75%</button>
+    <button id="zoom-in" title="放大窗口">＋</button>
     <button id="minimize" title="最小化">—</button>
     <button id="close" title="退出">×</button>
   </div>
@@ -90,6 +97,9 @@
   <script src="spine-render-scheduler.js"></script>
   <script src="ambient-behavior-director.js"></script>
   <script src="action-choreographer.js"></script>
+  <script src="animation-tail-loop.js"></script>
+  <script src="cinematic-player.js"></script>
+  <script src="animation-graph-player.js"></script>
   <script src="geometry-input.js"></script>
   <script src="pet-interaction.js"></script>
   <script src="toolbar-controller.js"></script>

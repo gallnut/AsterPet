@@ -30,4 +30,11 @@ const addonResult = spawnSync(compiler, [
 ], { stdio: "inherit" });
 
 if (addonResult.error) throw addonResult.error;
-process.exit(addonResult.status ?? 1);
+if (addonResult.status !== 0) process.exit(addonResult.status ?? 1);
+const x11Result = spawnSync(compiler, [
+  "-shared", "-fPIC", "-O2", "-Wall", "-Wextra", "-I/usr/include/node",
+  path.join(root, "src", "native", "platform", "linux", "x11", "addon.c"),
+  "-o", path.join(outputDirectory, "x11-input-region.node"), "-lX11", "-lXext"
+], { stdio: "inherit" });
+if (x11Result.error) throw x11Result.error;
+process.exit(x11Result.status ?? 1);

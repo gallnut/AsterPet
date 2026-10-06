@@ -45,7 +45,7 @@
       this.workerBusy = false;
       if (event.data?.buffer instanceof ArrayBuffer) this.triangleBuffer = new Float32Array(event.data.buffer);
       const runPendingUpdate = this.updatePending;
-      this.cachedPetRects = Array.isArray(event.data?.rects) ? event.data.rects : this.cachedPetRects;
+      this.cachedPetRects = Array.isArray(event.data?.rects) ? this.clipPetRects(event.data.rects) : this.cachedPetRects;
       const rasterElapsed = Number(event.data?.elapsed) || 0;
       this.rasterTotal += rasterElapsed;
       this.rasterMaximum = Math.max(this.rasterMaximum, rasterElapsed);
@@ -67,18 +67,35 @@
       }
     }
 
+    petPaneBounds() {
+      return document.getElementById("player").getBoundingClientRect();
+    }
+
+    clipPetRects(rects) {
+      const pane = this.petPaneBounds();
+      return rects.map(rect => {
+        const x = Math.max(0, Math.ceil(pane.left), rect.x);
+        const y = Math.max(0, Math.ceil(pane.top), rect.y);
+        const right = Math.min(innerWidth, Math.floor(pane.right), rect.x + rect.width);
+        const bottom = Math.min(innerHeight, Math.floor(pane.bottom), rect.y + rect.height);
+        return { x, y, width: right - x, height: bottom - y };
+      }).filter(rect => rect.width > 0 && rect.height > 0);
+    }
+
     addElementRect(rects, element) {
       if (!element || element.hidden) return;
       const style = getComputedStyle(element);
       if (style.display === "none" || style.visibility === "hidden") return;
       const bounds = element.getBoundingClientRect();
       if (bounds.width <= 0 || bounds.height <= 0) return;
-      rects.push({
-        x: Math.max(0, Math.floor(bounds.left)),
-        y: Math.max(0, Math.floor(bounds.top)),
-        width: Math.ceil(bounds.width),
-        height: Math.ceil(bounds.height)
-      });
+      const left = Math.max(0, Math.floor(bounds.left));
+      const top = Math.max(0, Math.floor(bounds.top));
+      const right = Math.min(innerWidth, Math.ceil(bounds.right));
+      const bottom = Math.min(innerHeight, Math.ceil(bounds.bottom));
+      if (right <= left || bottom <= top) return;
+      const rect = { x: left, y: top, width: right - left, height: bottom - top };
+      if (element === this.getSequenceImage() || element === this.getPlayer()?.canvas) rects.push(...this.clipPetRects([rect]));
+      else rects.push(rect);
     }
 
     addEmbeddedStatusRects(rects) {
@@ -204,7 +221,7 @@
         for (let source = 0, target = 0; source < vertices.length; source += stride, target += 2) {
           camera.worldToScreen(this.screenPoint.set(vertices[source], vertices[source + 1], 0), renderViewport.width, renderViewport.height);
           const localX = renderViewport.x + this.screenPoint.x;
-          this.projectedBuffer[target] = canvasBounds.left + (this.getMirrored ? canvasBounds.width - localX : localX);
+          this.projectedBuffer[target] = canvasBounds.left + (this.getMirrored() ? canvasBounds.width - localX : localX);
           this.projectedBuffer[target + 1] = canvasBounds.top + renderViewport.y + renderViewport.height - this.screenPoint.y;
         }
         for (let index = 0; index + 2 < indices.length; index += 3) {
@@ -333,9 +350,18 @@
 
     isOpaquePoint(clientX, clientY) {
       const scene = this.getScene();
+      const pane = this.petPaneBounds();
+      if (clientX < pane.left || clientX >= pane.right || clientY < pane.top || clientY >= pane.bottom) return false;
       if (scene?.type === "image-sequence") {
         const rect = this.getSequenceImage()?.getBoundingClientRect();
+        if (rect && (rect.right <= pane.left || rect.bottom <= pane.top || rect.left >= pane.right || rect.top >= pane.bottom)) return true;
         return Boolean(rect && clientX >= rect.left && clientX < rect.right && clientY >= rect.top && clientY < rect.bottom);
+      }
+      // If the user pans the entire drawing out of view, retain the same canvas
+      // recovery area used by reportInputShape so a right click can reopen tools.
+      if (this.cachedPetRects.length === 0) {
+        const bounds = this.getPlayer()?.canvas?.getBoundingClientRect();
+        return Boolean(bounds && clientX >= bounds.left && clientX < bounds.right && clientY >= bounds.top && clientY < bounds.bottom);
       }
       return this.cachedPetRects.some(rect => clientX >= rect.x && clientX < rect.x + rect.width && clientY >= rect.y && clientY < rect.y + rect.height);
     }

@@ -86,12 +86,14 @@ packager({
       const launcherPath = path.join(output, "AsterPet");
       fs.copyFileSync(path.join(projectRoot, "build", "native", bridgeName), bridgePath);
       fs.copyFileSync(path.join(projectRoot, "build", "native", bridgeLibraryName), bridgeLibraryPath);
+      fs.copyFileSync(path.join(projectRoot, "build", "native", "x11-input-region.node"), path.join(output, "x11-input-region.node"));
       fs.mkdirSync(fontconfigDirectory, { recursive: true });
       fs.copyFileSync(path.join(projectRoot, "resources", "fontconfig", "fonts.conf"), path.join(fontconfigDirectory, "fonts.conf"));
       fs.renameSync(launcherPath, binaryPath);
       fs.writeFileSync(launcherPath, `#!/bin/sh
 APP_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 export ASTERPET_WAYLAND_BRIDGE="$APP_DIR/${bridgeName}"
+export ASTERPET_X11_BRIDGE="$APP_DIR/x11-input-region.node"
 export LD_PRELOAD="$APP_DIR/${bridgeLibraryName}\${LD_PRELOAD:+:$LD_PRELOAD}"
 FONTCONFIG_CACHE_HOME="\${XDG_CACHE_HOME:-$HOME/.cache}/asterpet"
 FONTCONFIG_ROOT="$FONTCONFIG_CACHE_HOME/fontconfig-root"
@@ -105,12 +107,22 @@ export FONTCONFIG_SYSROOT="$FONTCONFIG_ROOT"
 export FONTCONFIG_FILE=/etc/fonts/fonts.conf
 export FONTCONFIG_PATH=/etc/fonts
 if [ -z "$ELECTRON_OZONE_PLATFORM_HINT" ]; then
-  if [ "$XDG_SESSION_TYPE" = "wayland" ] && [ -n "$WAYLAND_DISPLAY" ]; then
-    export ELECTRON_OZONE_PLATFORM_HINT=wayland
-  else
-    export ELECTRON_OZONE_PLATFORM_HINT=x11
+  case "\${XDG_CURRENT_DESKTOP:-\${DESKTOP_SESSION:-}}" in
+    *GNOME*|*gnome*)
+      if [ -n "$DISPLAY" ]; then export ELECTRON_OZONE_PLATFORM_HINT=x11; fi ;;
+  esac
+  if [ -z "$ELECTRON_OZONE_PLATFORM_HINT" ]; then
+    if [ "$XDG_SESSION_TYPE" = "wayland" ] && [ -n "$WAYLAND_DISPLAY" ]; then
+      export ELECTRON_OZONE_PLATFORM_HINT=wayland
+    else
+      export ELECTRON_OZONE_PLATFORM_HINT=x11
+    fi
   fi
 fi
+case " $* " in
+  *" --ozone-platform"*) ;;
+  *) set -- "--ozone-platform=$ELECTRON_OZONE_PLATFORM_HINT" "$@" ;;
+esac
 exec "$APP_DIR/AsterPet.bin" "$@"
 `);
       fs.chmodSync(launcherPath, 0o755);

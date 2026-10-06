@@ -1,4 +1,6 @@
 const animationSelect = document.getElementById("animations");
+const interactionModeButton = document.getElementById("interaction-mode");
+const stateLockButton = document.getElementById("state-lock");
 const appearanceSelect = document.getElementById("appearances");
 const propsPanel = document.getElementById("props-panel");
 const propsList = document.getElementById("props-list");
@@ -23,6 +25,7 @@ const embeddedStatus = document.getElementById("embedded-status");
 
 document.body.classList.toggle("native-wayland", window.desktopPet.nativeWayland);
 document.body.classList.toggle("macos", window.desktopPet.platform === "darwin");
+document.body.classList.toggle("side-tools", !window.desktopPet.nativeWayland);
 
 let scene;
 let sceneManifest;
@@ -42,9 +45,11 @@ let hiddenLayerSlotIndices = [];
 let currentAudio;
 let baseViewport;
 let animationViewports = {};
+const cinematicViewports = new Map();
 let appearanceOptions = new Map();
 let activeViewportAnimation;
 let sceneScale;
+const initialWindowScale = 1;
 let adaptiveWindowSize;
 let sequenceImage;
 let sequenceTimer;
@@ -52,6 +57,8 @@ let enabledPropSlots = new Set();
 let currentAgentState = "idle";
 let currentAgentPayload = { state: "idle" };
 let toolsVisible = false;
+let toolbarAnimationActive = false;
+let stateLocked = false;
 let mirrored = false;
 let disposing = false;
 let shutdownPrepared = false;
@@ -82,7 +89,7 @@ const behaviorDirector = new window.AsterPet.AmbientBehaviorDirector({
   isFullPoseAnimation: animationName => isFullPoseAnimation(animationName),
   getOverlayAnimation: animationName => getOverlayAnimation(animationName),
   canPlay: () => {
-    if (disposing || currentAgentState !== "idle") return false;
+    if (disposing || toolbarAnimationActive || currentAgentState !== "idle") return false;
     const currentAnimation = player?.animationState?.getCurrent(0)?.animation?.name;
     return currentAnimation === scene?.actions?.idle?.animation;
   },
@@ -96,6 +103,29 @@ const actionChoreographer = new window.AsterPet.ActionChoreographer({
   getOverlayAnimation: animationName => getOverlayAnimation(animationName),
   onAnimation: animationName => petLog(`Action overlay: ${animationName}`),
   log: message => petLog(message)
+});
+const animationGraphPlayer = new window.AsterPet.AnimationGraphPlayer({
+  getPlayer: () => player,
+  getScene: () => scene,
+  spineRuntime: spine,
+  onAnimation: animationName => setAnimationViewport(animationName),
+  onSelection: selection => { animationSelect.value = selection; },
+  log: message => petLog(message)
+});
+animationGraphPlayer.setInteractionMode(localStorage.getItem("interactionPlaybackMode"));
+function updateInteractionModeButton() {
+  const automatic = animationGraphPlayer.interactionMode === "auto";
+  interactionModeButton.hidden = !animationGraphPlayer.enabled;
+  document.body.classList.toggle("interaction-graph", animationGraphPlayer.enabled);
+  interactionModeButton.textContent = automatic ? "自动" : "手动";
+  interactionModeButton.title = automatic
+    ? "自动：左键连续播放，中键上一个动作；点击切换手动播放"
+    : "手动：左键下一个动作，中键上一个动作；点击切换自动播放";
+}
+interactionModeButton.addEventListener("click", () => {
+  animationGraphPlayer.setInteractionMode(animationGraphPlayer.interactionMode === "auto" ? "manual" : "auto");
+  localStorage.setItem("interactionPlaybackMode", animationGraphPlayer.interactionMode);
+  updateInteractionModeButton();
 });
 const geometryInput = new window.AsterPet.GeometryInputController({
   desktopPet: window.desktopPet,
@@ -114,11 +144,14 @@ const petInteraction = new window.AsterPet.PetInteractionController({
   element: playerElement,
   geometryInput,
   getScene: () => scene,
-  getScale: () => sceneScale,
+  getAnimationGraphEnabled: () => animationGraphPlayer.enabled,
+  getStateLocked: () => stateLocked,
   getToolsVisible: () => toolsVisible,
   setToolsVisible: visible => setToolsVisible(visible),
   playAction: action => playAction(action),
-  changeScale: delta => changeSceneScale(delta),
+  playInteraction: gesture => animationGraphPlayer.interact(gesture),
+  zoomView: (factor, x, y) => zoomCamera(factor, x, y),
+  panView: (dx, dy) => panCamera(dx, dy),
   log: message => petLog(message)
 });
 const toolbarController = new window.AsterPet.ToolbarController({
@@ -170,10 +203,10 @@ const toolbarController = new window.AsterPet.ToolbarController({
   },
   setToolsVisible: visible => setToolsVisible(visible),
   setMousePassthrough: enabled => setMousePassthrough(enabled),
-  playAnimation: name => playAnimation(name),
+  playAnimation: name => playAnimation(name, { holdFinal: true }),
   changeScale: delta => changeSceneScale(delta),
   toggleMirrored: () => { void toggleMirrored(); },
-  getAnimationNames: () => animationNames,
+  getAnimationNames: () => animationGraphPlayer.enabled ? animationGraphPlayer.choices().map(choice => choice.id) : animationNames,
   selectAppearance: optionId => selectAppearance(optionId)
 });
 
@@ -210,20 +243,6 @@ function applyEmbeddedStatusLayout(layout) {
   requestAnimationFrame(() => geometryInput.reportInputShape());
 }
 
-function positionUtilityPanels() {
-  if (window.desktopPet.nativeWayland) return;
-  const petRects = geometryInput.cachedPetRects;
-  const petLeft = petRects.length > 0 ? Math.min(...petRects.map(rect => rect.x)) : innerWidth / 2;
-  const petRight = petRects.length > 0 ? Math.max(...petRects.map(rect => rect.x + rect.width)) : innerWidth / 2;
-  const leftSpace = Math.max(0, petLeft - 20);
-  const rightSpace = Math.max(0, innerWidth - petRight - 20);
-  const dockLeft = leftSpace >= rightSpace;
-  const width = Math.max(180, Math.min(300, dockLeft ? leftSpace : rightSpace));
-  document.documentElement.style.setProperty("--utility-panel-width", `${width}px`);
-  document.documentElement.style.setProperty("--utility-panel-left", dockLeft ? "10px" : "auto");
-  document.documentElement.style.setProperty("--utility-panel-right", dockLeft ? "auto" : "10px");
-}
-
 function setToolsVisible(visible) {
   toolsVisible = visible;
   document.body.classList.toggle("tools-visible", visible);
@@ -235,7 +254,7 @@ function setToolsVisible(visible) {
     aiPanel.hidden = true;
     packagesPanel.hidden = true;
   }
-  positionUtilityPanels();
+  geometryInput.requestVisualBoundsUpdate();
   requestAnimationFrame(() => geometryInput.reportInputShape());
 }
 
@@ -264,6 +283,7 @@ async function disposeScene({ shutdown = false } = {}) {
   disposing = true;
   sceneGeneration += 1;
   clearTimeout(petInteraction.touchTimer);
+  setStateLocked(false);
   if (shutdown) {
     petInteraction.dispose();
     geometryInput.stop();
@@ -278,6 +298,9 @@ async function disposeScene({ shutdown = false } = {}) {
   }
   actionChoreographer.stop();
   behaviorDirector.stop();
+  animationGraphPlayer.stop();
+  toolbarAnimationActive = false;
+  updateInteractionModeButton();
   renderScheduler.stop();
   spinePlayerHost.clear();
   player = undefined;
@@ -296,6 +319,7 @@ async function disposeScene({ shutdown = false } = {}) {
   overlayAnimationCache.clear();
   baseViewport = undefined;
   animationViewports = {};
+  cinematicViewports.clear();
   activeViewportAnimation = undefined;
   adaptiveWindowSize = undefined;
   animationSelect.replaceChildren();
@@ -413,6 +437,7 @@ function applyMirroredState() {
   document.body.classList.toggle("pet-mirrored", mirrored);
   mirrorButton.setAttribute("aria-pressed", String(mirrored));
   mirrorButton.title = mirrored ? "恢复原始方向" : "水平镜像";
+  applyCameraView();
   geometryInput.mirrorChanged();
 }
 
@@ -793,8 +818,14 @@ sceneFilter.addEventListener("change", buildSceneList);
 
 function applyConfiguredLayerVisibility(targetSkeleton, animationName) {
   const activeAnimation = animationName
-    || (targetSkeleton === player?.skeleton ? player.animationState?.getCurrent(0)?.animation?.name : undefined);
-  const activeStagePrefix = resolveAnimationStagePrefix(targetSkeleton, activeAnimation);
+    || (targetSkeleton === player?.skeleton
+      ? animationGraphPlayer.viewportAnimation || player.animationState?.getCurrent(0)?.animation?.name : undefined);
+  const activeStagePrefix = animationGraphPlayer.enabled ? undefined : resolveAnimationStagePrefix(targetSkeleton, activeAnimation);
+  for (const slotIndex of animationGraphPlayer.getHiddenRigSlots(activeAnimation)) {
+    const slot = targetSkeleton.slots[slotIndex];
+    slot.color.a = 0;
+    slot.setAttachment(null);
+  }
   for (const slotIndex of hiddenLayerSlotIndices) {
     const slot = targetSkeleton.slots[slotIndex];
     if (!slot) continue;
@@ -820,6 +851,8 @@ function rebuildLayerVisibilityCache() {
 
 function applyLayerVisibility(resetSlots = true) {
   if (resetSlots) {
+    cinematicViewports.clear();
+    activeViewportAnimation = undefined;
     enabledPropSlots = new Set(
       [...propsList.querySelectorAll("input[data-slot-name]:checked")]
         .map(input => input.dataset.slotName)
@@ -838,10 +871,13 @@ function enforceLayerVisibilityAfterAnimation() {
   const animationState = player.animationState;
   const originalApply = animationState.apply.bind(animationState);
   animationState.apply = skeleton => {
-    const animationName = animationState.getCurrent(0)?.animation?.name;
+    const animationName = animationGraphPlayer.enabled
+      ? animationGraphPlayer.viewportAnimation
+      : animationState.getCurrent(0)?.animation?.name;
     if (animationName) {
       setAnimationViewport(animationName);
-      if (animationSelect.value !== animationName) animationSelect.value = animationName;
+      const selection = animationGraphPlayer.enabled ? animationGraphPlayer.selection : animationName;
+      if (selection && animationSelect.value !== selection) animationSelect.value = selection;
     }
     const result = originalApply(skeleton);
     applyLayerVisibility(false);
@@ -892,7 +928,7 @@ function normalizeSceneActions() {
   scene.actions = scene.actions || {};
   const configuredIdleName = scene.actions.idle?.animation;
   const preferredIdleName = animationNames.find(name => /^(?:idle|inact|stand|wait)(?:\d|_|$)/i.test(name));
-  if (/^loop$/i.test(configuredIdleName) && preferredIdleName) {
+  if (scene.category !== "cg" && /^loop$/i.test(configuredIdleName) && preferredIdleName) {
     scene.actions.idle = { ...scene.actions.idle, animation: preferredIdleName, loop: true };
     petLog(`Scene idle upgraded: ${configuredIdleName} -> ${preferredIdleName}`);
   }
@@ -943,7 +979,18 @@ function playAction(actionName) {
     petLog(`Scene action unavailable: ${requestedAction}`);
     return false;
   }
+  toolbarAnimationActive = false;
+  window.AsterPet.releaseAnimationPose(player);
   const actionAnimation = player.skeleton.data.findAnimation(action.animation);
+  if (animationGraphPlayer.enabled) {
+    const animation = resolvedActionName === "idle" ? animationGraphPlayer.currentState : action.animation;
+    actionChoreographer.interrupt();
+    if (animationGraphPlayer.play(animation)) {
+      if (action.voicePool) playVoice(action.voicePool);
+      petLog(`Playing graph action ${resolvedActionName}: ${animation}`);
+      return true;
+    }
+  }
   const configuredHoldMs = Number(action.holdMs);
   const defaultHoldMs = resolvedActionName.toLowerCase() === "dead" ? 200 : 0;
   const holdMs = Number.isFinite(configuredHoldMs) ? Math.max(0, configuredHoldMs) : defaultHoldMs;
@@ -979,24 +1026,39 @@ function applyAgentState(payload) {
     playAction(configured.action);
   } else if (configured?.animation) {
     playAnimation(configured.animation);
-  } else {
+  } else if (!toolbarAnimationActive && !window.AsterPet.preservesInteractionSelection(scene, animationGraphPlayer.enabled)) {
     playAction(defaultAgentStateActions[currentAgentState] || "idle");
     petLog(`Applied agent state ${currentAgentState}`);
   }
-  if (scene.type !== "image-sequence") actionChoreographer.setAgentState(currentAgentState);
+  if (scene.type !== "image-sequence" && !toolbarAnimationActive) actionChoreographer.setAgentState(currentAgentState);
 }
 
 
-function playAnimation(animationName) {
+function playAnimation(animationName, { holdFinal = false } = {}) {
   if (scene.type === "image-sequence") {
     showSequenceFrame(animationNames.indexOf(animationName));
     return;
   }
+  if (animationGraphPlayer.enabled) {
+    actionChoreographer.interrupt();
+    if (animationGraphPlayer.play(animationName, { holdFinal })) {
+      toolbarAnimationActive = holdFinal;
+      return;
+    }
+  }
   if (!animationNames.includes(animationName)) return;
+  window.AsterPet.releaseAnimationPose(player);
+  toolbarAnimationActive = holdFinal;
   const animation = player.skeleton.data.findAnimation(animationName);
   behaviorDirector.noteActivity((animation?.duration || 0) * 1000);
   actionChoreographer.interrupt();
-  player.animationState.setAnimation(0, animationName, true);
+  player.animationState.clearTracks();
+  const loop = !holdFinal || animationName === scene.actions.idle.animation;
+  const entry = player.animationState.setAnimation(0, animationName, loop);
+  if (holdFinal && !loop) entry.listener = { complete: () => {
+    if (!toolbarAnimationActive || player.animationState.getCurrent(0) !== entry) return;
+    window.AsterPet.holdAnimationPose(player);
+  } };
   setAnimationViewport(animationName);
   player.config.animation = animationName;
   player.play();
@@ -1011,6 +1073,7 @@ function applySceneScale() {
       minActualWidth: scene.window.minActualWidth
     });
     zoomLabel.textContent = `${Math.round(sceneScale * 100)}%`;
+    applyCameraView();
     return;
   }
   if (!player || !baseViewport) return;
@@ -1030,11 +1093,11 @@ function applySceneScale() {
       padBottom: padding
     }]))
   };
-  const currentAnimation = player.animationState?.getCurrent(0)?.animation?.name || scene.actions.idle.animation;
+  const currentAnimation = animationGraphPlayer.viewportAnimation
+    || player.animationState?.getCurrent(0)?.animation?.name || scene.actions.idle.animation;
   activeViewportAnimation = undefined;
-  player.setViewport(currentAnimation);
+  setAnimationViewport(currentAnimation);
   player.previousViewport = undefined;
-  activeViewportAnimation = currentAnimation;
   const targetBaseWidth = adaptiveWindowSize?.width ?? scene.window.baseWidth;
   const targetWidth = Math.max(scene.window.minActualWidth ?? 0, Math.round(targetBaseWidth * sceneScale));
   const targetHeight = Math.round((adaptiveWindowSize?.height ?? scene.window.baseHeight) * sceneScale);
@@ -1046,54 +1109,219 @@ function applySceneScale() {
     minActualWidth: scene.window.minActualWidth
   });
   zoomLabel.textContent = `${Math.round(sceneScale * 100)}%`;
-  positionUtilityPanels();
+  applyCameraView();
   setTimeout(() => geometryInput.requestVisualBoundsUpdate(), 80);
 }
 
 function changeSceneScale(delta) {
-  sceneScale = Math.min(scene.window.maxScale, Math.max(scene.window.minScale, sceneScale + delta));
+  const minimum = Math.min(scene.window.minScale ?? 0.5, 0.2);
+  const maximum = Math.max(scene.window.maxScale ?? 1.4, 4);
+  sceneScale = Math.min(maximum, Math.max(minimum, Math.round((sceneScale + delta) * 100) / 100));
   applySceneScale();
 }
 
+// Camera preferences use fractions of the pet pane so window resizing preserves composition.
+function cameraStorageKey() {
+  return `cameraView:${scene.id}`;
+}
+
+function restoreCameraView() {
+  let view;
+  try { view = JSON.parse(localStorage.getItem(cameraStorageKey())); } catch { /* Use the default view. */ }
+  spinePlayerHost.setView(view);
+}
+
+function cameraPaneBounds() {
+  return playerElement.getBoundingClientRect();
+}
+
+function applyCameraView() {
+  spinePlayerHost.applyStableViewport();
+  const view = spinePlayerHost.view;
+  if (sequenceImage) {
+    const bounds = cameraPaneBounds();
+    sequenceImage.style.transform = `translate(${view.panX * bounds.width * (mirrored ? -1 : 1)}px, ${view.panY * bounds.height}px) scale(${view.zoom * (mirrored ? -1 : 1)}, ${view.zoom})`;
+  }
+  zoomLabel.title = `窗口 ${Math.round((sceneScale || 1) * 100)}% · 镜头 ${Math.round(view.zoom * 100)}%｜点击复位镜头；滚轮缩放，右键拖动画面`;
+  geometryInput.requestVisualBoundsUpdate();
+}
+
+function saveCameraView(view) {
+  spinePlayerHost.setView(view);
+  applyCameraView();
+  try { localStorage.setItem(cameraStorageKey(), JSON.stringify(spinePlayerHost.view)); } catch { /* Viewing still works without storage. */ }
+}
+
+function zoomCamera(factor, clientX, clientY) {
+  if (!scene) return;
+  const bounds = cameraPaneBounds();
+  if (!bounds.width || !bounds.height) return;
+  const view = spinePlayerHost.view;
+  const zoom = Math.min(10, Math.max(0.1, view.zoom * factor));
+  const ratio = zoom / view.zoom;
+  const anchorX = ((clientX - bounds.left) / bounds.width - 0.5) * (mirrored ? -1 : 1);
+  const anchorY = (clientY - bounds.top) / bounds.height - 0.5;
+  saveCameraView({ zoom, panX: anchorX - (anchorX - view.panX) * ratio, panY: anchorY - (anchorY - view.panY) * ratio });
+}
+
+function panCamera(dx, dy) {
+  const bounds = cameraPaneBounds();
+  if (!scene || !bounds.width || !bounds.height) return;
+  const view = spinePlayerHost.view;
+  saveCameraView({ ...view, panX: view.panX + dx / bounds.width * (mirrored ? -1 : 1), panY: view.panY + dy / bounds.height });
+}
+
+zoomLabel.addEventListener("click", () => saveCameraView({ zoom: 1, panX: 0, panY: 0 }));
+document.getElementById("camera-reset").addEventListener("click", () => saveCameraView({ zoom: 1, panX: 0, panY: 0 }));
+
+function setStateLocked(locked) {
+  stateLocked = Boolean(locked);
+  clearTimeout(petInteraction.touchTimer);
+  petInteraction.touchTimer = undefined;
+  stateLockButton.setAttribute("aria-pressed", String(stateLocked));
+  stateLockButton.textContent = stateLocked ? "已固定" : "固定";
+  stateLockButton.title = stateLocked
+    ? "当前动作已固定：人物单击、双击和中键不会切换动作；点击解除固定"
+    : "固定当前动作，防止人物点击切换动作";
+}
+
+stateLockButton.addEventListener("click", () => setStateLocked(!stateLocked));
+
 function setAnimationViewport(animationName) {
-  if (!player || !animationName || activeViewportAnimation === animationName) return;
-  activeViewportAnimation = animationName;
+  if (!player || !animationName) return;
+  const cinematic = animationGraphPlayer.cinematic;
+  const segment = cinematic?.cameraSegment(animationName) ?? 0;
+  const viewportKey = cinematic ? `${animationName}:${segment}` : animationName;
+  if (activeViewportAnimation === viewportKey) return;
   try {
+    if (cinematic) {
+      if (!cinematicViewports.has(animationName)) cinematicViewports.set(animationName, calculateCinematicViewports(animationName));
+      const viewport = cinematicViewports.get(animationName)?.[segment];
+      if (viewport) {
+        animationViewports[animationName] = viewport;
+        const padding = scene.viewport?.padding ?? "4%";
+        player.config.viewport.animations[animationName] = {
+          ...viewport, padLeft: padding, padRight: padding, padTop: padding, padBottom: padding
+        };
+      }
+    }
+    if (!animationViewports[animationName]) {
+      const viewportAnimations = animationGraphPlayer.getViewportAnimations(animationName);
+      const sampled = calculateAnimationVisibleBounds(viewportAnimations)?.animations;
+      const bounds = mergeViewportBounds(Object.values(sampled || {}));
+      if (bounds) {
+        const viewport = { x: bounds.offset.x, y: bounds.offset.y, width: bounds.size.x, height: bounds.size.y };
+        if (isValidViewport(viewport)) {
+          const padding = scene.viewport?.padding ?? "4%";
+          for (const name of viewportAnimations) {
+            if (name !== animationName && name === animationGraphPlayer.getBaseAnimation(animationName)) continue;
+            animationViewports[name] = viewport;
+            player.config.viewport.animations[name] = {
+              ...viewport,
+              padLeft: padding,
+              padRight: padding,
+              padTop: padding,
+              padBottom: padding
+            };
+          }
+        }
+      }
+    }
     player.setViewport(animationName);
+    activeViewportAnimation = viewportKey;
   } catch (error) {
     petLog(`Animation viewport unavailable: ${animationName}: ${error.message || error}`);
   }
+}
+
+function calculateCinematicViewports(animationName) {
+  const cinematic = animationGraphPlayer.cinematic;
+  const data = player.skeleton.data;
+  const animation = data.findAnimation(animationName);
+  const skeleton = new spine.Skeleton(data);
+  if (player.skeleton.skin) skeleton.setSkin(player.skeleton.skin);
+  skeleton.scaleX = player.skeleton.scaleX;
+  skeleton.scaleY = player.skeleton.scaleY;
+  skeleton.x = player.skeleton.x;
+  skeleton.y = player.skeleton.y;
+  const baseName = cinematic.baseFor(animationName);
+  const base = baseName && data.findAnimation(baseName);
+  const times = cinematic.cameraTimes(animationName);
+  try {
+    return times.map((start, index) => {
+      const end = times[index + 1] ?? animation.duration;
+      const bounds = [];
+      const count = Math.max(2, Math.min(60, Math.ceil((end - start) * 30)));
+      for (let sample = 0; sample < count; sample += 1) {
+        // Do not include the next shot's first frame in this shot's bounds.
+        const time = start + Math.max(0, end - start - (index + 1 < times.length ? 0.001 : 0)) * sample / (count - 1);
+        skeleton.setToSetupPose();
+        base?.apply(skeleton, base.duration, base.duration, false, [], 1, spine.MixBlend.first, spine.MixDirection.mixIn);
+        animation.apply(skeleton, time, time, false, [], 1, spine.MixBlend.replace, spine.MixDirection.mixIn);
+        cinematic.cameraFor(animationName)?.apply(skeleton, time, time, true, [], 1, spine.MixBlend.replace, spine.MixDirection.mixIn);
+        skeleton.updateWorldTransform();
+        applyConfiguredLayerVisibility(skeleton, animationName);
+        const visible = getVisibleSkeletonBounds(skeleton);
+        if (visible) bounds.push(visible);
+      }
+      const merged = mergeViewportBounds(bounds);
+      return merged && { x: merged.offset.x, y: merged.offset.y, width: merged.size.x, height: merged.size.y };
+    });
+  } finally { skeleton.dispose?.(); }
 }
 
 function getVisibleSkeletonBounds(targetSkeleton = player?.skeleton) {
   if (!targetSkeleton) return undefined;
   const skeleton = targetSkeleton;
   const vertices = [];
+  const clipper = new spine.SkeletonClipping();
+  const color = new spine.Color(1, 1, 1, 1);
   let minX = Infinity;
   let minY = Infinity;
   let maxX = -Infinity;
   let maxY = -Infinity;
   for (const slot of skeleton.drawOrder) {
-    if (isLayoutDecorationSlot(slot.data.name)) continue;
-    if (!slot.bone.active) continue;
+    if (!slot.bone.active) { clipper.clipEndWithSlot(slot); continue; }
     const attachment = slot.getAttachment();
+    if (attachment instanceof spine.ClippingAttachment) {
+      clipper.clipStart(slot, attachment);
+      continue;
+    }
     const alpha = skeleton.color.a * slot.color.a * (attachment?.color?.a ?? 1);
-    if (!attachment || alpha <= 0.02) continue;
+    if (!attachment || alpha <= 0.02 || isLayoutDecorationSlot(slot.data.name)) {
+      clipper.clipEndWithSlot(slot);
+      continue;
+    }
     vertices.length = attachment instanceof spine.RegionAttachment
       ? 8
       : attachment instanceof spine.MeshAttachment
         ? attachment.worldVerticesLength
         : 0;
-    if (vertices.length === 0) continue;
+    if (vertices.length === 0) { clipper.clipEndWithSlot(slot); continue; }
     if (attachment instanceof spine.RegionAttachment) attachment.computeWorldVertices(slot, vertices, 0, 2);
     else attachment.computeWorldVertices(slot, 0, vertices.length, vertices, 0, 2);
-    for (let index = 0; index < vertices.length; index += 2) {
-      minX = Math.min(minX, vertices[index]);
-      minY = Math.min(minY, vertices[index + 1]);
-      maxX = Math.max(maxX, vertices[index]);
-      maxY = Math.max(maxY, vertices[index + 1]);
+    let visibleVertices = vertices;
+    let stride = 2;
+    if (clipper.isClipping()) {
+      const triangles = attachment instanceof spine.RegionAttachment ? [0, 1, 2, 2, 3, 0] : attachment.triangles;
+      clipper.clipTriangles(vertices, vertices.length, triangles, triangles.length, attachment.uvs, color, color, false);
+      visibleVertices = clipper.clippedVertices;
+      stride = 8;
     }
+    let left = Infinity, bottom = Infinity, right = -Infinity, top = -Infinity;
+    for (let index = 0; index < visibleVertices.length; index += stride) {
+      left = Math.min(left, visibleVertices[index]); bottom = Math.min(bottom, visibleVertices[index + 1]);
+      right = Math.max(right, visibleVertices[index]); top = Math.max(top, visibleVertices[index + 1]);
+    }
+    // Authors often hide an entire alternate rig by scaling its bones to zero.
+    // Its collapsed vertices must not enlarge the visible shot's framing.
+    if (right - left > 0.001 && top - bottom > 0.001) {
+      minX = Math.min(minX, left); minY = Math.min(minY, bottom);
+      maxX = Math.max(maxX, right); maxY = Math.max(maxY, top);
+    }
+    clipper.clipEndWithSlot(slot);
   }
+  clipper.clipEnd();
   if (!Number.isFinite(minX) || !Number.isFinite(minY) || maxX <= minX || maxY <= minY) return undefined;
   return {
     offset: new spine.Vector2(minX, minY),
@@ -1101,7 +1329,7 @@ function getVisibleSkeletonBounds(targetSkeleton = player?.skeleton) {
   };
 }
 
-function calculateAnimationVisibleBounds() {
+function calculateAnimationVisibleBounds(animationNamesToSample) {
   if (!player?.skeleton || typeof spine.Skeleton !== "function") return undefined;
   const sourceSkeleton = player.skeleton;
   const sampledSkeleton = new spine.Skeleton(sourceSkeleton.data);
@@ -1128,6 +1356,10 @@ function calculateAnimationVisibleBounds() {
     .map(actionName => scene?.actions?.[actionName]?.animation || actionName)
     .filter(animationName => typeof animationName === "string")
     .filter(animationName => animationName !== cutInAnimationName));
+  interactiveAnimationNames.add(idleAnimationName);
+  const sampledAnimationNames = animationNamesToSample
+    ? new Set(animationNamesToSample)
+    : interactiveAnimationNames;
   const mergeBounds = (target, bounds) => {
     const minX = bounds.offset.x;
     const minY = bounds.offset.y;
@@ -1149,14 +1381,20 @@ function calculateAnimationVisibleBounds() {
   try {
     const animations = sourceSkeleton.data.animations;
     for (const animation of animations) {
-      if (!interactiveAnimationNames.has(animation.name)) continue;
+      if (!sampledAnimationNames.has(animation.name)) continue;
+      const baseAnimationName = animationGraphPlayer.getBaseAnimation(animation.name);
+      const baseAnimation = baseAnimationName && sourceSkeleton.data.findAnimation(baseAnimationName);
       const sampleCount = Math.max(24, Math.min(120, Math.ceil(animation.duration * 60)));
       for (let sample = 0; sample < sampleCount; sample += 1) {
         const time = animation.duration > 0
           ? animation.duration * sample / (sampleCount - 1 || 1)
           : 0;
         sampledSkeleton.setToSetupPose();
-        animation.apply(sampledSkeleton, time, time, false, [], 1, 0, 0);
+        const baseTime = animationGraphPlayer.cinematic ? baseAnimation?.duration : time;
+        baseAnimation?.apply(sampledSkeleton, baseTime, baseTime, !animationGraphPlayer.cinematic, [], 1, spine.MixBlend.first, spine.MixDirection.mixIn);
+        animation.apply(sampledSkeleton, time, time, false, [], 1,
+          baseAnimation ? spine.MixBlend.replace : spine.MixBlend.setup, spine.MixDirection.mixIn);
+        animationGraphPlayer.cinematic?.cameraFor(animation.name)?.apply(sampledSkeleton, time, time, true, [], 1, spine.MixBlend.replace, spine.MixDirection.mixIn);
         sampledSkeleton.updateWorldTransform();
         applyConfiguredLayerVisibility(sampledSkeleton, animation.name);
         const bounds = getVisibleSkeletonBounds(sampledSkeleton);
@@ -1172,9 +1410,8 @@ function calculateAnimationVisibleBounds() {
     sampledSkeleton.dispose?.();
   }
   const idle = toBounds(idleUnion);
-  if (!idle) return undefined;
   const animations = Object.fromEntries([...animationUnions.entries()]
-    .filter(([animationName]) => interactiveAnimationNames.has(animationName))
+    .filter(([animationName]) => sampledAnimationNames.has(animationName))
     .map(([animationName, target]) => {
       const bounds = toBounds(target);
       return [animationName, bounds];
@@ -1260,14 +1497,22 @@ function fitSkeletonToWindow() {
         .map(bounds => limitViewportExpansion(idleBounds, bounds, scene.viewport?.maxInteractiveExpansion))
     ])
     : idleBounds;
-  const { offset, size } = stableViewportBounds;
+  // The window may reserve room for large actions, but its camera should fit
+  // the selected pose instead of shrinking the idle into that whole envelope.
+  const fitCurrentPose = animationGraphPlayer.enabled || scene.category === "interaction";
+  const { offset, size } = fitCurrentPose ? idleBounds : stableViewportBounds;
   const idleViewport = { x: offset.x, y: offset.y, width: size.x, height: size.y };
   if (!isValidViewport(idleViewport)) {
     petLog(`Invalid sampled viewport: ${JSON.stringify(idleViewport)}`);
     return;
   }
   baseViewport = idleViewport;
-  animationViewports = {};
+  animationViewports = fitCurrentPose
+    ? { [scene.actions.idle.animation]: idleViewport }
+    : Object.fromEntries(
+      [...(sampledBounds?.interactiveAnimationNames || [scene.actions.idle.animation])]
+        .map(animationName => [animationName, idleViewport])
+    );
   if (scene.window.adaptiveToContent && idleBounds.size.x > 0 && idleBounds.size.y > 0) {
     const idleWindowSize = calculateAdaptiveWindowSize(idleBounds, stableViewportBounds);
     adaptiveWindowSize = {
@@ -1347,7 +1592,7 @@ async function initializePlayer() {
     regex: group.pattern ? new RegExp(group.pattern, "i") : undefined,
     exact: group.pattern ? /^\^.+\$$/.test(group.pattern) : true
   }));
-  sceneScale = scene.window.defaultScale;
+  sceneScale = initialWindowScale;
   document.title = scene.title;
   status.textContent = `正在加载 ${scene.title}…`;
   window.desktopPet.configure(scene.title);
@@ -1378,10 +1623,15 @@ async function initializePlayer() {
       player.skeleton.setSkinByName(selectedAppearance.skin);
       player.skeleton.setSlotsToSetupPose();
     }
-    for (const animationName of animationNames) {
+    animationGraphPlayer.start(animationNames);
+    updateInteractionModeButton();
+    const animationChoices = animationGraphPlayer.enabled
+      ? animationGraphPlayer.choices()
+      : animationNames.map(id => ({ id, label: id }));
+    for (const choice of animationChoices) {
       const option = document.createElement("option");
-      option.value = animationName;
-      option.textContent = animationName;
+      option.value = choice.id;
+      option.textContent = choice.label;
       animationSelect.append(option);
     }
     addUnclassifiedPropGroup();
@@ -1389,11 +1639,12 @@ async function initializePlayer() {
     buildSceneList();
     applyLayerVisibility();
     enforceLayerVisibilityAfterAnimation();
-    behaviorDirector.start();
-    actionChoreographer.start();
+    if (!animationGraphPlayer.enabled) {
+      behaviorDirector.start();
+      actionChoreographer.start();
+    }
     fitSkeletonToWindow();
     renderScheduler.start(player);
-    positionUtilityPanels();
     playAction("idle");
     applyAgentState(currentAgentPayload);
     setTimeout(() => geometryInput.requestVisualBoundsUpdate(), 120);
@@ -1425,7 +1676,7 @@ function toggleSequencePlayback() {
 }
 
 function initializeImageSequence() {
-  sceneScale = scene.window.defaultScale;
+  sceneScale = initialWindowScale;
   animationNames = scene.assets.frames.map(frame => frame.name);
   document.title = scene.title;
   window.desktopPet.configure(scene.title);
@@ -1476,6 +1727,7 @@ async function loadScene(requestedScene) {
   const scenePath = sceneManifest.scenes[selectedScene];
   if (!scenePath) throw new Error(`Unknown scene: ${selectedScene}`);
   scene = await window.desktopPet.getSceneConfig(selectedScene);
+  restoreCameraView();
   await migrateLegacyPropVisibility(scene.id);
   if (scene.type === "image-sequence") initializeImageSequence();
   else await initializePlayer();
@@ -1515,7 +1767,7 @@ window.addEventListener("beforeunload", () => {
   if (!disposing && !shutdownPrepared) void disposeScene({ shutdown: true });
 });
 window.addEventListener("resize", () => {
-  positionUtilityPanels();
+  applyCameraView();
   requestAnimationFrame(() => geometryInput.reportInputShape());
 });
 embeddedStatus.addEventListener("load", () => requestAnimationFrame(() => geometryInput.reportInputShape()));
