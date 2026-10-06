@@ -39,7 +39,7 @@ jobs:
           cache: pnpm
 
       - name: Install native build dependencies
-        run: sudo apt-get update && sudo apt-get install --no-install-recommends -y build-essential libnode-dev libwayland-dev
+        run: sudo apt-get update && sudo apt-get install --no-install-recommends -y build-essential libnode-dev libwayland-dev libx11-dev libxext-dev
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -68,7 +68,7 @@ jobs:
           cache: pnpm
 
       - name: Install native build dependencies
-        run: sudo apt-get update && sudo apt-get install --no-install-recommends -y build-essential libnode-dev libwayland-dev
+        run: sudo apt-get update && sudo apt-get install --no-install-recommends -y build-essential libnode-dev libwayland-dev libx11-dev libxext-dev
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -83,6 +83,8 @@ jobs:
           test -x dist/AsterPet-linux-x64/AsterPet
           test -f dist/AsterPet-linux-x64/AsterPet.bin
           test -f dist/AsterPet-linux-x64/wayland-drag-bridge.node
+          test -f dist/AsterPet-linux-x64/wayland-interpose.so
+          test -f dist/AsterPet-linux-x64/x11-input-region.node
           test -f dist/AsterPet-linux-x64/LICENSE
           test -f dist/AsterPet-linux-x64/NOTICE
           test -f dist/AsterPet-linux-x64/THIRD_PARTY_NOTICES.md

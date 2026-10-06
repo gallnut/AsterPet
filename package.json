@@ -30,6 +30,7 @@
   },
   "devDependencies": {
     "@electron/packager": "20.3.0",
+    "@esotericsoftware/spine-core": "4.1.55",
     "electron": "38.8.6"
   }
 }

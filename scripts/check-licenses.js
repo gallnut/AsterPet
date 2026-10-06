@@ -1,5 +1,6 @@
 const fs = require("node:fs");
 const path = require("node:path");
+const { createRequire } = require("node:module");
 
 const projectRoot = path.resolve(__dirname, "..");
 
@@ -7,8 +8,8 @@ function readJson(relativePath) {
   return JSON.parse(fs.readFileSync(path.join(projectRoot, relativePath), "utf8"));
 }
 
-function packageJson(packageName) {
-  const absolutePath = require.resolve(`${packageName}/package.json`);
+function packageJson(packageName, resolver = require) {
+  const absolutePath = resolver.resolve(`${packageName}/package.json`);
   return readJson(path.relative(projectRoot, absolutePath));
 }
 
@@ -23,16 +24,18 @@ function assert(condition, message) {
   if (!condition) throw new Error(`License check failed: ${message}`);
 }
 
+const spinePlayerRequire = createRequire(require.resolve("@esotericsoftware/spine-player/package.json"));
+const spineWebglRequire = createRequire(spinePlayerRequire.resolve("@esotericsoftware/spine-webgl/package.json"));
 const expectedPackages = [
   ["electron", "MIT"],
   ["extract-zip", "BSD-2-Clause"],
   ["@esotericsoftware/spine-player", "LicenseRef-LICENSE"],
-  ["@esotericsoftware/spine-core", "LicenseRef-LICENSE"],
-  ["@esotericsoftware/spine-webgl", "LicenseRef-LICENSE"]
+  ["@esotericsoftware/spine-core", "LicenseRef-LICENSE", spineWebglRequire],
+  ["@esotericsoftware/spine-webgl", "LicenseRef-LICENSE", spinePlayerRequire]
 ];
 
-for (const [name, expectedLicense] of expectedPackages) {
-  const metadata = packageJson(name);
+for (const [name, expectedLicense, resolver] of expectedPackages) {
+  const metadata = packageJson(name, resolver);
   assert(licenseValue(metadata) === expectedLicense, `${name} declares ${licenseValue(metadata) || "no license"}, expected ${expectedLicense}`);
 }
 
